@@ -80,7 +80,7 @@ class ScreenshotApp:
 
         # 宽度：以控件需要的宽度为主，略微增加一点边距即可，让整体更紧凑
         win_width = max(req_width + 10, 110)
-        win_width = min(win_width, 150)
+        win_width = min(win_width, 170)
 
         # 高度直接用控件实际需要的高度，保证文字不被裁剪
         win_height = req_height
