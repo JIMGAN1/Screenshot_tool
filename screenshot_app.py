@@ -2,19 +2,14 @@
 快捷截图 - 主界面类
 """
 import tkinter as tk
-# from tkinter import messagebox
 import os
-import sys
+import ctypes
 
-# 添加当前目录到路径，确保导入正确
-if hasattr(sys, 'frozen') and sys.frozen:
-    # 打包后的环境
-    app_dir = os.path.dirname(sys.executable)
-    if app_dir not in sys.path:
-        sys.path.insert(0, app_dir)
+import mss
+from PIL import Image
 
 from capture_overlay import CaptureOverlay
-from utils import save_screenshot, copy_to_clipboard, get_current_directory
+from utils import save_screenshot, copy_to_clipboard
 
 
 class ScreenshotApp:
@@ -29,11 +24,14 @@ class ScreenshotApp:
         self.auto_save = tk.BooleanVar(value=False)
         self.is_capturing = False
 
-        # 设置窗口大小和位置
+        # 设置窗口基础属性
         self._setup_window()
 
         # 创建界面元素
         self._create_widgets()
+
+        # 根据实际内容和 DPI 自动调整窗口大小和位置
+        self._adjust_window_geometry()
 
         # 全界面可以拖动
         self.root.bind("<Button-1>", self.start_drag)
@@ -44,25 +42,9 @@ class ScreenshotApp:
         self.y = 0
 
     def _setup_window(self):
-        """设置窗口大小和位置"""
-        screen_width = self.root.winfo_screenwidth()
-        screen_height = self.root.winfo_screenheight()
-
-        # 窗口宽度为屏幕宽度的1/20，但最小为100，最大为180
-        win_width = screen_width // 20
-        print(win_width)
-        win_width = max(100, min(win_width, 180))
-
-        # 窗口高度
-        win_height = 80
-
-        # 位置：右上角
-        win_x = screen_width - win_width * 2
-        win_y = screen_height // 10
-
-        self.root.geometry(f"{win_width}x{win_height}+{win_x}+{win_y}")
-        self.root.resizable(False, False)
+        """设置窗口基础属性（不固定高度，避免高分屏文字被挤压）"""
         self.root.title("✂️快捷截图")
+        self.root.resizable(False, False)
 
         # 移除窗口图标
         # try:
@@ -72,8 +54,7 @@ class ScreenshotApp:
 
         # 使用工具窗口样式，只保留关闭按钮（隐藏最小化和最大化）
         self.root.attributes('-toolwindow', True)
-        # self.root.resizable(False, False)
-        self.root.attributes('-alpha', 0.7) # 设置窗口透明度
+        self.root.attributes('-alpha', 0.8) # 设置窗口透明度
         self.root.attributes('-topmost', True)  # 始终置顶
         # try:
         #     # self.root.iconbitmap('JT.ico') # 设置窗口图标
@@ -82,6 +63,33 @@ class ScreenshotApp:
         #     # self.root._icon = icon  # 防止被垃圾回收
         # except:
         #     pass
+
+    def _adjust_window_geometry(self):
+        """根据控件实际大小和屏幕分辨率，自动调整窗口大小和位置
+
+        这样在 125% / 150% 缩放、高 DPI 显示器上，文字不会被挤压或裁剪。
+        """
+        # 先让 Tk 计算所有控件所需的最小大小
+        self.root.update_idletasks()
+
+        req_width = self.root.winfo_reqwidth()
+        req_height = self.root.winfo_reqheight()
+
+        screen_width = self.root.winfo_screenwidth()
+        screen_height = self.root.winfo_screenheight()
+
+        # 宽度：以控件需要的宽度为主，略微增加一点边距即可，让整体更紧凑
+        win_width = max(req_width + 10, 110)
+        win_width = min(win_width, 150)
+
+        # 高度直接用控件实际需要的高度，保证文字不被裁剪
+        win_height = req_height
+
+        # 位置：右上角，预留出一点距离
+        win_x = screen_width - win_width * 2
+        win_y = screen_height // 10
+
+        self.root.geometry(f"{win_width}x{win_height}+{win_x}+{win_y}")
 
 
     def _create_widgets(self):
@@ -112,8 +120,6 @@ class ScreenshotApp:
             # highlightcolor="#181a1b",#
             cursor='hand2',# 鼠标悬停时显示手型
             command=self._on_capture_click,
-            height=0, 
-            pady=0,  # 用内边距调整高度
             # relief=tk.FLAT, 
             relief=tk.RAISED # 按钮样式
         )
@@ -189,9 +195,30 @@ class ScreenshotApp:
         self.root.after(100, lambda: self._show_overlay(on_capture, on_cancel))
 
     def _show_overlay(self, on_capture, on_cancel):
-        """显示覆盖层"""
+        """显示覆盖层
+
+        在创建覆盖层之前，预先截一张“干净”的全屏图，用于放大镜和取色，
+        这样半透明遮罩就不会影响颜色数值。
+        """
         try:
-            overlay = CaptureOverlay(self.root, on_capture, on_cancel)
+            # 使用主窗口的屏幕尺寸截取全屏图像（不带遮罩）
+            screen_w = self.root.winfo_screenwidth()
+            screen_h = self.root.winfo_screenheight()
+
+            with mss.mss() as sct:
+                monitor = {
+                    "left": 0,
+                    "top": 0,
+                    "width": screen_w,
+                    "height": screen_h,
+                }
+                screenshot = sct.grab(monitor)
+                base_image = Image.frombytes(
+                    "RGB", screenshot.size, screenshot.bgra, "raw", "BGRX"
+                )
+
+            # 把预先截好的底图传给覆盖层，后续所有取色/放大都基于这张图
+            overlay = CaptureOverlay(self.root, on_capture, on_cancel, base_image)
         except Exception as e:
             print(f"创建覆盖层失败：{e}")
             self._on_capture_error(str(e))
@@ -242,8 +269,22 @@ class ScreenshotApp:
         self.root.geometry(f"+{x}+{y}")
 
 
+def _set_dpi_awareness():
+    """避免高分屏缩放导致坐标/截图偏移"""
+    try:
+        # Windows 8.1 及以上
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    except Exception:
+        try:
+            # 旧版本兼容
+            ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
+
+
 def main():
     """主函数"""
+    _set_dpi_awareness()
     root = tk.Tk()
 
     # 先创建应用（窗口位置会在初始化时设置好）
