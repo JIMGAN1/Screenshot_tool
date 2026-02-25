@@ -64,10 +64,10 @@ class CaptureOverlay:
         # 顶部提示文字（半透明窗口上方，不影响截图结果）
         self.tip_label = tk.Label(
             self.root,
-            text="请按Esc或者右键取消截图，按右键复制坐标和颜色",
+            text="请按Esc或者右键取消截图，右键复制坐标和颜色",
             bg="#000000",
             fg="#ffffff",
-            font=("Microsoft YaHei UI", 11, "bold")
+            font=("Microsoft YaHei UI", 20, "bold")
         )
         self.tip_label.place(relx=0.5, y=10, anchor="n")
 

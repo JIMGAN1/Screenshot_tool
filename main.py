@@ -3,6 +3,7 @@
 """
 import sys
 import os
+from PIL import Image
 
 # 处理打包后的路径问题
 if hasattr(sys, 'frozen') and sys.frozen:

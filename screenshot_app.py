@@ -2,7 +2,7 @@
 快捷截图 - 主界面类
 """
 import tkinter as tk
-from tkinter import messagebox
+# from tkinter import messagebox
 import os
 import sys
 
@@ -35,36 +35,54 @@ class ScreenshotApp:
         # 创建界面元素
         self._create_widgets()
 
+        # 全界面可以拖动
+        self.root.bind("<Button-1>", self.start_drag)
+        self.root.bind("<B1-Motion>", self.drag)
+        
+        # 记录拖动起始位置
+        self.x = 0
+        self.y = 0
+
     def _setup_window(self):
         """设置窗口大小和位置"""
         screen_width = self.root.winfo_screenwidth()
         screen_height = self.root.winfo_screenheight()
 
-        # 窗口宽度为屏幕的 1/18，整体更紧凑
-        win_width = screen_width // 18
-        win_width = max(150, min(win_width, 230))
+        # 窗口宽度为屏幕宽度的1/20，但最小为100，最大为180
+        win_width = screen_width // 20
+        print(win_width)
+        win_width = max(100, min(win_width, 180))
 
-        # 高度调整为紧凑布局
-        win_height = 105
+        # 窗口高度
+        win_height = 80
 
-        # 位置：右上角，距离上下边缘 1/6
-        win_x = screen_width - win_width - 50
-        win_y = screen_height // 6
+        # 位置：右上角
+        win_x = screen_width - win_width * 2
+        win_y = screen_height // 10
 
         self.root.geometry(f"{win_width}x{win_height}+{win_x}+{win_y}")
         self.root.resizable(False, False)
-        self.root.title("快捷截图")
+        self.root.title("✂️快捷截图")
 
         # 移除窗口图标
-        try:
-            self.root.iconbitmap('')
-        except:
-            pass
+        # try:
+        #     self.root.iconbitmap('')
+        # except:
+        #     pass
 
         # 使用工具窗口样式，只保留关闭按钮（隐藏最小化和最大化）
         self.root.attributes('-toolwindow', True)
-
+        # self.root.resizable(False, False)
+        self.root.attributes('-alpha', 0.7) # 设置窗口透明度
         self.root.attributes('-topmost', True)  # 始终置顶
+        # try:
+        #     # self.root.iconbitmap('JT.ico') # 设置窗口图标
+        #     icon = tk.PhotoImage(file='JT.png')  # 加载图标文件,iconbitmap加载有问题
+        #     self.root.iconphoto(True, icon)
+        #     # self.root._icon = icon  # 防止被垃圾回收
+        # except:
+        #     pass
+
 
     def _create_widgets(self):
         """创建界面元素"""
@@ -74,41 +92,34 @@ class ScreenshotApp:
 
         # 主框架
         main_frame = tk.Frame(self.root, bg=bg_color)
-        main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 
-        # 统一样式
-        btn_font = ('Microsoft YaHei UI', 10, 'bold')
-
-        # 截图按钮大字体
-        capture_btn_font = ('Microsoft YaHei UI', 14, 'bold')
-        btn_bg = '#3498db'  # 蓝色
-        btn_fg = 'white'
-        btn_active_bg = '#2980b9'
-        btn_active_fg = 'white'
+        # 按钮统一颜色
+        btn_bg = '#3498db'  # 按钮初始颜色
+        btn_fg = 'white'      # 字体颜色
         btn_checked_bg = '#0059e8'  # 勾选后深蓝色
 
-        # 使用统一宽度（260 像素，略微收窄）
-        uniform_width = 260
 
         # 截图按钮(高度扩大1.5倍)
         self.capture_btn = tk.Button(
             main_frame,
-            text="框选截图",
-            font=capture_btn_font,
-            bg='#1485ee',  # 初始颜色
+            text="点击截图",
+            font=('Microsoft YaHei UI', 13, 'bold'),
+            bg=btn_bg,
             fg=btn_fg,
-            activebackground=btn_active_bg,
-            activeforeground=btn_active_fg,
-            cursor='hand2',
+            activebackground="#0099f9", # 激活背景颜色
+            activeforeground="#81FFC0", # 激活字体颜色
+            # highlightcolor="#181a1b",#
+            cursor='hand2',# 鼠标悬停时显示手型
             command=self._on_capture_click,
-            height=1,
-            pady=6,  # 用内边距调整高度
-            relief=tk.FLAT,
-            borderwidth=0
+            height=0, 
+            pady=0,  # 用内边距调整高度
+            # relief=tk.FLAT, 
+            relief=tk.RAISED # 按钮样式
         )
-        self.capture_btn.pack(fill=tk.X, pady=(0, 4))
+        self.capture_btn.pack(fill=tk.X, pady=(0, 3))
 
-        # 自动保存复选框（居中显示，与按钮宽度一致）
+        # 自动保存复选框
         cb_frame = tk.Frame(main_frame, bg=bg_color)
         cb_frame.pack(fill=tk.X)
 
@@ -116,7 +127,7 @@ class ScreenshotApp:
             cb_frame,
             text="自动保存",
             variable=self.auto_save,
-            font=btn_font,
+            font=('Microsoft YaHei UI', 11, 'bold'),
             bg=btn_bg,
             fg=btn_fg,
             selectcolor=btn_checked_bg,
@@ -124,9 +135,9 @@ class ScreenshotApp:
             activeforeground=btn_fg,
             cursor='hand2',
             relief=tk.FLAT,
-            command=self._on_auto_save_changed,
-            indicatoron=False,
-            width=uniform_width // 8  # 复选框宽度与按钮一致
+            command=self._on_auto_save_changed,# 绑定事件
+            indicatoron=False,# 不显示默认的勾
+            width=150,
         )
         self.auto_save_cb.pack()
 
@@ -135,7 +146,7 @@ class ScreenshotApp:
         if self.auto_save.get():
             self.capture_btn.config(bg='#0059e8')
         else:
-            self.capture_btn.config(bg='#1485ee')  # 恢复初始颜色
+            self.capture_btn.config(bg='#3498db')  # 恢复初始颜色
 
     def _on_capture_click(self):
         """点击截图按钮"""
@@ -210,23 +221,30 @@ class ScreenshotApp:
         self.root.lift()
         self.root.attributes('-topmost', True)
         self._update_status(f"截图失败：{error_msg}")
-        messagebox.showerror("错误", f"截图失败：{error_msg}")
+        # messagebox.showerror("错误", f"截图失败：{error_msg}")
 
     def _update_status(self, message):
         """更新状态信息"""
         # 由于去掉了状态栏，这里可以记录日志或执行其他操作
         print(message)
+    
+    def start_drag(self, event):
+        """记录拖动起始点"""
+        self.x = event.x
+        self.y = event.y
+    
+    def drag(self, event):
+        """处理拖动"""
+        deltax = event.x - self.x
+        deltay = event.y - self.y
+        x = self.root.winfo_x() + deltax
+        y = self.root.winfo_y() + deltay
+        self.root.geometry(f"+{x}+{y}")
 
 
 def main():
     """主函数"""
     root = tk.Tk()
-
-    # 移除窗口图标
-    try:
-        root.iconbitmap('')
-    except:
-        pass
 
     # 先创建应用（窗口位置会在初始化时设置好）
     app = ScreenshotApp(root)
