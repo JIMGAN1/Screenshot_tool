@@ -54,7 +54,6 @@ class ScreenshotApp:
 
         # 使用工具窗口样式，只保留关闭按钮（隐藏最小化和最大化）
         self.root.attributes('-toolwindow', True)
-        self.root.attributes('-alpha', 0.8) # 设置窗口透明度
         self.root.attributes('-topmost', True)  # 始终置顶
         # try:
         #     # self.root.iconbitmap('JT.ico') # 设置窗口图标
@@ -287,17 +286,16 @@ def main():
     _set_dpi_awareness()
     root = tk.Tk()
 
-    # 启动时先隐藏窗口，等布局/尺寸/位置都计算并设置好后再显示，避免闪烁/跳动
-    root.withdraw()
+    # 启动时先完全透明，等布局/尺寸/位置都计算并设置好后再显示，避免启动时闪烁/跳动
+    root.attributes('-alpha', 0.0)
 
-    # 先创建应用（窗口位置会在初始化时设置好）
+    # 创建应用（窗口位置会在初始化时设置好）
     app = ScreenshotApp(root)
 
-    # 让 Tk 完成一次布局计算（不进入事件循环）
     root.update_idletasks()
 
-    # 一次性显示最终状态
-    root.deiconify()
+
+    root.attributes('-alpha', 0.8)  # 与应用内保持一致的透明度
     root.lift()
     root.attributes('-topmost', True)
 
