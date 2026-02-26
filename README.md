@@ -75,12 +75,6 @@ screenshot_tool/
 
 使用 `mss` 库快速捕获屏幕区域，并使用 `Pillow` 进行图像放大和显示：
 
-```python
-with mss.mss() as sct:
-    monitor = {"left": x, "top": y, "width": width, "height": height}
-    screenshot = sct.grab(monitor)
-    image = Image.frombytes("RGB", screenshot.size, screenshot.bgra, "raw", "BGRX")
-```
 
 **打包命令**：
 项目使用 PyInstaller 打包，可生成单文件可执行程序。
