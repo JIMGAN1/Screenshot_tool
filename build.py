@@ -19,7 +19,7 @@ PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 os.chdir(PROJECT_DIR)
 
 # 版本号
-VERSION = "1.1.2"
+VERSION = "1.2.2"
 
 # GitHub信息
 GITHUB_URL = "https://github.com/JIMGAN1/screenshot-tool"
@@ -88,6 +88,11 @@ VSVersionInfo(
 
 def build():
     """使用 PyInstaller 打包为单个 EXE"""
+    # 简单提示当前环境，建议在 JT_conda 虚拟环境中执行
+    conda_env = os.environ.get("CONDA_DEFAULT_ENV", "")
+    if conda_env and conda_env != "JT_conda":
+        print(f"⚠ 当前 Conda 环境为：{conda_env}，建议在 JT_conda 环境中执行打包（conda activate JT_conda）")
+
     # 获取版本号
     version = sys.argv[1] if len(sys.argv) > 1 else VERSION
     
@@ -112,7 +117,11 @@ def build():
     # 图标可选：如果同目录下有 JT.ico 则使用图标
     icon_path = os.path.join(PROJECT_DIR, "JT.ico")
     if os.path.exists(icon_path):
+        # 作为主程序图标嵌入，用于托盘图标
         cmd += ["--icon", icon_path]
+        # 同时作为资源文件一起打包进 EXE，运行时从内部解包目录加载托盘图标
+        # Windows 下 --add-data 的分隔符为 ';'
+        cmd += ["--add-data", f"{icon_path};."]
 
     # 入口脚本（内部再导入 screenshot_app.main）
     cmd.append("main.py")

@@ -5,7 +5,7 @@ a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=[('D:\\SourceCode\\PY\\screenshot_tool\\JT.ico', '.')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
@@ -35,6 +35,6 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    version='D:\\SourceCode\\PY\\screenshot_tool\\version_1u93nwa0.txt',
+    version='D:\\SourceCode\\PY\\screenshot_tool\\version_oodmng8_.txt',
     icon=['D:\\SourceCode\\PY\\screenshot_tool\\JT.ico'],
 )

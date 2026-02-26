@@ -9,6 +9,7 @@ import win32gui
 import win32con
 import win32process
 import os
+import ctypes
 
 
 class CaptureOverlay:
@@ -28,9 +29,16 @@ class CaptureOverlay:
 
         # 创建全屏窗口
         self.root = tk.Toplevel(parent)
-        self.root.attributes('-fullscreen', True)
+        # 使用无边框顶层窗口，避免在任务栏生成单独按钮（配合手动铺满全屏）
+        self.root.overrideredirect(True)
         self.root.attributes('-topmost', True)
         self.root.configure(cursor='cross')
+        # 手动设置为全屏大小
+        # 这里窗口本身的高度可以使用 Tk 的 screenheight（工作区高度也没关系），
+        # 真正用于“桌面全屏截图”的尺寸，后续统一使用预截图/系统分辨率来计算。
+        screen_w = self.root.winfo_screenwidth()
+        screen_h = self.root.winfo_screenheight()
+        self.root.geometry(f"{screen_w}x{screen_h}+0+0")
         # 稍微提高整体不透明度，让提示文字/高亮更清晰，但仍保持半透明遮罩
         self.root.attributes('-alpha', 0.3)
 
@@ -45,7 +53,8 @@ class CaptureOverlay:
         except Exception:
             pass
 
-        # 预先截好的一整张屏幕图像：用于放大镜和实时取色，避免半透明遮罩影响颜色
+        # 预先截好的一整张屏幕图像：用于放大镜和实时取色，避免半透明遮罩影响颜色，
+        # 同时也作为“真实整屏尺寸”（包含任务栏）的依据。
         self.fullscreen_image = base_image
 
         # 截图区域变量
@@ -60,6 +69,8 @@ class CaptureOverlay:
         self.window_rect = None  # 当前窗口区域
         self.window_rect_id = None  # 窗口区域矩形ID
         self.window_hwnd = None  # 当前窗口句柄（用于调试窗口/客户区差异）
+        # 是否当前命中的是“桌面全屏”（用于单击桌面时全屏截图，包含任务栏）
+        self.is_desktop_fullscreen = False
 
         # 放大器尺寸（略放大，提升可读性）
         self.magnifier_size = 120  # 放大显示尺寸
@@ -441,6 +452,8 @@ class CaptureOverlay:
         try:
             # 默认重置当前窗口句柄（避免残留旧值）
             self.window_hwnd = None
+            # 默认认为不是桌面全屏，只有命中桌面兜底/桌面类窗口时才置为 True
+            self.is_desktop_fullscreen = False
             # 使用传入的坐标（画布坐标），没有则退回当前记录的坐标
             if x is None or y is None:
                 x = self.current_x
@@ -463,8 +476,17 @@ class CaptureOverlay:
             own_pid = os.getpid()
 
             # 获取屏幕尺寸（用于后续桌面全屏兜底）
-            screen_w = self.root.winfo_screenwidth()
-            screen_h = self.root.winfo_screenheight()
+            # 优先使用预先截好的整屏图尺寸，确保包含任务栏；否则再退回系统 API。
+            if self.fullscreen_image is not None:
+                screen_w = self.fullscreen_image.width
+                screen_h = self.fullscreen_image.height
+            else:
+                try:
+                    screen_w = ctypes.windll.user32.GetSystemMetrics(0)
+                    screen_h = ctypes.windll.user32.GetSystemMetrics(1)
+                except Exception:
+                    screen_w = self.root.winfo_screenwidth()
+                    screen_h = self.root.winfo_screenheight()
 
             # 获取任务栏矩形，用于避免把任务栏误识别为“桌面全屏”
             taskbar_rect = None
@@ -535,6 +557,8 @@ class CaptureOverlay:
                     "right": screen_w,
                     "bottom": screen_h,
                 }
+                # 桌面兜底视为“桌面全屏”
+                self.is_desktop_fullscreen = True
                 # 记录为无实际窗口句柄（后续取色时会自动走 mss 方式）
                 self.window_hwnd = None
                 return desktop_rect
@@ -549,6 +573,20 @@ class CaptureOverlay:
 
             if class_name in taskbar_classes:
                 return None
+
+            # 如果命中的是桌面窗口（Progman/WorkerW），则认为是“桌面全屏截图”场景：
+            # 直接返回整屏矩形，这样任务栏和托盘也会一起被截取。
+            desktop_classes = {"Progman", "WorkerW"}
+            if class_name in desktop_classes:
+                # 命中桌面窗口，同样标记为桌面全屏
+                self.is_desktop_fullscreen = True
+                self.window_hwnd = None
+                return {
+                    "left": 0,
+                    "top": 0,
+                    "right": screen_w,
+                    "bottom": screen_h,
+                }
 
             # 计算在覆盖层坐标系中的窗口矩形（包含非客户区，可能带阴影）
             left, top, right, bottom = win32gui.GetWindowRect(hwnd)
@@ -622,17 +660,15 @@ class CaptureOverlay:
             # 隐藏覆盖层
             self.root.withdraw()
 
-            # 获取屏幕位置（考虑多显示器）
+            # 截图逻辑恢复为最初的实现：统一按照覆盖层坐标换算成屏幕坐标来抓图，
+            # 不区分“桌面全屏”与否，避免引入额外的不一致行为。
             screen_x = self.root.winfo_rootx()
             screen_y = self.root.winfo_rooty()
-
-            # 转换为屏幕坐标
             abs_x1 = screen_x + x1
             abs_y1 = screen_y + y1
             abs_x2 = screen_x + x2
             abs_y2 = screen_y + y2
 
-            # 截图
             bbox = (abs_x1, abs_y1, abs_x2, abs_y2)
             image = ImageGrab.grab(bbox=bbox)
 

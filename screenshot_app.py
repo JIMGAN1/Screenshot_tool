@@ -3,14 +3,23 @@
 """
 import tkinter as tk
 import os
-import ctypes
 import sys
+import ctypes
+import threading
 
 import mss
 from PIL import Image
+import pystray
 
 from capture_overlay import CaptureOverlay
 from utils import save_screenshot, copy_to_clipboard
+
+
+def _resource_path(relative_path: str) -> str:
+    """获取资源文件路径，兼容开发环境和 PyInstaller 单文件环境."""
+    # PyInstaller 在运行时会在 sys._MEIPASS 中解包资源文件
+    base_path = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base_path, relative_path)
 
 class ScreenshotApp:
     """快捷截图主界面"""
@@ -23,6 +32,8 @@ class ScreenshotApp:
         self.root = root
         self.auto_save = tk.BooleanVar(value=False)
         self.is_capturing = False
+        # 是否在截图完成后恢复主界面（只有当用户主动“显示程序界面”后才为 True）
+        self.restore_after_capture = False
 
         # 设置窗口基础属性
         self._setup_window()
@@ -200,17 +211,10 @@ class ScreenshotApp:
         这样半透明遮罩就不会影响颜色数值。
         """
         try:
-            # 使用主窗口的屏幕尺寸截取全屏图像（不带遮罩）
-            screen_w = self.root.winfo_screenwidth()
-            screen_h = self.root.winfo_screenheight()
-
+            # 使用 mss 的主监视器信息截取整屏图像（包含任务栏），
+            # 作为放大镜/取色以及“桌面全屏截图”的真实基准尺寸。
             with mss.mss() as sct:
-                monitor = {
-                    "left": 0,
-                    "top": 0,
-                    "width": screen_w,
-                    "height": screen_h,
-                }
+                monitor = sct.monitors[1]  # 主显示器
                 screenshot = sct.grab(monitor)
                 base_image = Image.frombytes(
                     "RGB", screenshot.size, screenshot.bgra, "raw", "BGRX"
@@ -224,9 +228,11 @@ class ScreenshotApp:
 
     def _on_capture_done(self, saved_path):
         """截图完成"""
-        self.root.deiconify()
-        self.root.lift()
-        self.root.attributes('-topmost', True)
+        # 只有在用户主动“显示程序界面”后，才在每次截图后恢复主窗口
+        if self.restore_after_capture:
+            self.root.deiconify()
+            self.root.lift()
+            self.root.attributes('-topmost', True)
 
         if saved_path:
             filename = os.path.basename(saved_path)
@@ -236,16 +242,22 @@ class ScreenshotApp:
 
     def _on_capture_cancelled(self):
         """截图取消"""
-        self.root.deiconify()
-        self.root.lift()
-        self.root.attributes('-topmost', True)
+        # 只有在用户主动“显示程序界面”后，才在每次截图后恢复主窗口
+        if self.restore_after_capture:
+            self.root.deiconify()
+            self.root.lift()
+            self.root.attributes('-topmost', True)
+
         self._update_status("截图已取消")
 
     def _on_capture_error(self, error_msg):
         """截图错误"""
-        self.root.deiconify()
-        self.root.lift()
-        self.root.attributes('-topmost', True)
+        # 只有在用户主动“显示程序界面”后，才在每次截图后恢复主窗口
+        if self.restore_after_capture:
+            self.root.deiconify()
+            self.root.lift()
+            self.root.attributes('-topmost', True)
+
         self._update_status(f"截图失败：{error_msg}")
         # messagebox.showerror("错误", f"截图失败：{error_msg}")
 
@@ -285,19 +297,90 @@ def main():
     """主函数"""
     _set_dpi_awareness()
     root = tk.Tk()
-
-    # 启动时先完全透明，等布局/尺寸/位置都计算并设置好后再显示，避免启动时闪烁/跳动
-    root.attributes('-alpha', 0.0)
+    # 启动时不显示主界面，只在系统托盘中显示图标
+    root.withdraw()
 
     # 创建应用（窗口位置会在初始化时设置好）
     app = ScreenshotApp(root)
 
-    root.update_idletasks()
+    # 关闭按钮只隐藏窗口，不退出程序（保留托盘图标继续工作）
+    def on_close():
+        root.withdraw()
+        # 用户主动关闭主窗口后，不再在截图完成时自动恢复主界面
+        app.restore_after_capture = False
 
+    root.protocol("WM_DELETE_WINDOW", on_close)
 
-    root.attributes('-alpha', 0.8)  # 与应用内保持一致的透明度
-    root.lift()
-    root.attributes('-topmost', True)
+    # 创建系统托盘图标
+    def show_main_window():
+        """显示主界面"""
+        if not bool(root.state() == 'normal'):
+            root.deiconify()
+        # 用户明确通过托盘菜单显示了程序界面，
+        # 之后每次截图完成/取消/出错时都恢复主窗口
+        app.restore_after_capture = True
+        try:
+            root.attributes('-alpha', 0.8)
+        except Exception:
+            pass
+        root.lift()
+        root.attributes('-topmost', True)
+
+    def on_tray_capture(icon, item):
+        """托盘截图（菜单项默认动作，也用于左键点击）"""
+        # 在 Tk 主线程中调用截图逻辑
+        root.after(0, app._on_capture_click)
+
+    def on_tray_show(icon, item):
+        """显示程序界面"""
+        root.after(0, show_main_window)
+
+    def on_tray_toggle_auto_save(icon, item):
+        """切换自动保存状态"""
+        def toggle():
+            app.auto_save.set(not app.auto_save.get())
+            app._on_auto_save_changed()
+        root.after(0, toggle)
+
+    def on_tray_exit(icon, item):
+        """退出程序"""
+        icon.visible = False
+        icon.stop()
+        root.after(0, root.destroy)
+
+    # 右键菜单：第一个菜单项为默认项，双击或左键激活
+    menu = pystray.Menu(
+        pystray.MenuItem('立即截图', on_tray_capture, default=True),
+        pystray.MenuItem('显示程序界面', on_tray_show),
+        pystray.MenuItem(
+            '自动保存',
+            on_tray_toggle_auto_save,
+            checked=lambda item: app.auto_save.get()
+        ),
+        pystray.MenuItem('退出程序', on_tray_exit)
+    )
+
+    # 加载托盘图标（优先从打包进 EXE 的资源中加载）
+    def load_tray_image():
+        try:
+            icon_path = _resource_path("JT.ico")
+            if os.path.exists(icon_path):
+                return Image.open(icon_path)
+        except Exception:
+            pass
+        # 兜底：生成一个简单的小图片，避免因图标问题导致程序崩溃
+        img = Image.new('RGB', (64, 64), color=(0, 180, 255))
+        return img
+
+    tray_image = load_tray_image()
+    tray_icon = pystray.Icon("快捷截图", tray_image, "快捷截图", menu)
+
+    # 在单独的线程中运行托盘事件循环，避免阻塞 Tk 主循环
+    def run_tray():
+        tray_icon.run()
+
+    tray_thread = threading.Thread(target=run_tray, daemon=True)
+    tray_thread.start()
 
     root.mainloop()
 
