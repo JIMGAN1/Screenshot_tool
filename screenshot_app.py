@@ -4,13 +4,13 @@
 import tkinter as tk
 import os
 import ctypes
+import sys
 
 import mss
 from PIL import Image
 
 from capture_overlay import CaptureOverlay
 from utils import save_screenshot, copy_to_clipboard
-
 
 class ScreenshotApp:
     """快捷截图主界面"""
@@ -36,7 +36,7 @@ class ScreenshotApp:
         # 全界面可以拖动
         self.root.bind("<Button-1>", self.start_drag)
         self.root.bind("<B1-Motion>", self.drag)
-        
+
         # 记录拖动起始位置
         self.x = 0
         self.y = 0
@@ -287,11 +287,19 @@ def main():
     _set_dpi_awareness()
     root = tk.Tk()
 
+    # 启动时先隐藏窗口，等布局/尺寸/位置都计算并设置好后再显示，避免闪烁/跳动
+    root.withdraw()
+
     # 先创建应用（窗口位置会在初始化时设置好）
     app = ScreenshotApp(root)
 
-    # 确保窗口位置更新后再进入主循环
-    root.update()
+    # 让 Tk 完成一次布局计算（不进入事件循环）
+    root.update_idletasks()
+
+    # 一次性显示最终状态
+    root.deiconify()
+    root.lift()
+    root.attributes('-topmost', True)
 
     root.mainloop()
 

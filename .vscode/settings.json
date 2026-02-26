@@ -2,6 +2,5 @@
   "python-envs.defaultEnvManager": "ms-python.python:conda",
   "python-envs.defaultPackageManager": "ms-python.python:conda",
   "python.defaultInterpreterPath": "C:\\Users\\10658\\.conda\\envs\\JT_conda\\python.exe",
-  "python.condaPath": "C:\\ProgramData\\miniconda3\\Scripts\\conda.exe",
   "python.terminal.activateEnvironment": true
 }

@@ -35,5 +35,6 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=['D:\\OpenCode\\screenshot_tool\\JT.ico'],
+    version='D:\\SourceCode\\PY\\screenshot_tool\\version_u83lsw7r.txt',
+    icon=['D:\\SourceCode\\PY\\screenshot_tool\\JT.ico'],
 )
