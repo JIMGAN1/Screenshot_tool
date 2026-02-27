@@ -66,7 +66,7 @@ VSVersionInfo(
            StringStruct(u'FileDescription', u'快捷截图工具'),
            StringStruct(u'FileVersion', u'{version}'),
            StringStruct(u'InternalName', u'ScreenshotTool'),
-           StringStruct(u'LegalCopyright', u'源码{GITHUB_URL})'),
+           StringStruct(u'LegalCopyright', u'源码:{GITHUB_URL}'),
            StringStruct(u'OriginalFilename', u'ScreenshotTool.exe'),
            StringStruct(u'ProductName', u'快捷截图'),
            StringStruct(u'ProductVersion', u'{version}')]

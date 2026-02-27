@@ -129,8 +129,8 @@ class CaptureOverlay:
         # 放大镜画布
         self.magnifier_canvas = tk.Canvas(
             main_frame,
-            width=self.magnifier_size,
-            height=self.magnifier_size,
+            width=self.magnifier_size - 1,
+            height=self.magnifier_size - 1,
             bg='white',
             highlightthickness=1,
             highlightbackground='#444'
@@ -141,29 +141,29 @@ class CaptureOverlay:
         center = self.magnifier_size // 2
         self.magnifier_canvas.create_line(
             0, center, self.magnifier_size, center,
-            fill='#00aaff', width=1, tags='center'
+            fill="#00aaff", width=1, tags='center'
         )
         self.magnifier_canvas.create_line(
             center, 0, center, self.magnifier_size,
             fill='#00aaff', width=1, tags='center'
         )
 
-        # 在放大镜画布上显示坐标（左上角）和色值（右上角）
+        # 在放大镜画布上显示坐标色值（左上角）
         self.coord_text_id = self.magnifier_canvas.create_text(
             4,
             9,
             anchor=tk.W,
             text="0|0",
-            fill="#00bbff",
-            font=("Microsoft YaHei UI", 8, "bold")
+            fill="#ffffff",
+            font=("Microsoft YaHei UI", 9, "bold")
         )
         self.color_text_id = self.magnifier_canvas.create_text(
             4,
-            23,
+            25,
             anchor=tk.W,
             text="#000000",
-            fill="#00bbff",
-            font=("Microsoft YaHei UI", 8, "bold")
+            fill="#ffffff",
+            font=("Microsoft YaHei UI", 9, "bold")
         )
 
     def _update_magnifier(self, x, y):

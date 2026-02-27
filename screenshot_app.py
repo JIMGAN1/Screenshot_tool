@@ -291,10 +291,38 @@ def _set_dpi_awareness():
             ctypes.windll.user32.SetProcessDPIAware()
         except Exception:
             pass
+    
+
+def _ensure_single_instance() -> bool:
+    """确保程序单实例运行，若已有实例则返回 False."""
+    # 只在 Windows 下使用基于命名互斥量的单实例判断
+    if not sys.platform.startswith("win"):
+        return True
+
+    mutex_name = "Global\\QuickScreenshotMutex"
+    kernel32 = ctypes.windll.kernel32
+
+    h_mutex = kernel32.CreateMutexW(None, False, mutex_name)
+    if not h_mutex:
+        # 创建互斥量失败时，放行程序，避免因权限问题完全无法使用
+        return True
+
+    ERROR_ALREADY_EXISTS = 183
+    if kernel32.GetLastError() == ERROR_ALREADY_EXISTS:
+        # 已经有实例在运行，静默退出
+        kernel32.CloseHandle(h_mutex)
+        return False
+
+    # 保存句柄，保持互斥量在进程生命周期内有效
+    globals()["_instance_mutex_handle"] = h_mutex
+    return True
 
 
 def main():
     """主函数"""
+    # 确保程序单实例运行
+    if not _ensure_single_instance():
+        return
     _set_dpi_awareness()
     root = tk.Tk()
     # 启动时不显示主界面，只在系统托盘中显示图标
@@ -342,6 +370,64 @@ def main():
             app._on_auto_save_changed()
         root.after(0, toggle)
 
+    def _get_autostart_command() -> str:
+        """
+        返回写入 Windows Run 注册表的启动命令。
+
+        - PyInstaller 打包后：使用 exe 路径
+        - 源码运行：使用 python.exe + 当前脚本路径
+        """
+        if getattr(sys, "frozen", False):
+            exe_path = os.path.abspath(sys.executable)
+            return f'"{exe_path}"'
+
+        python_exe = os.path.abspath(sys.executable)
+        script_path = os.path.abspath(sys.argv[0] if sys.argv else __file__)
+        return f'"{python_exe}" "{script_path}"'
+
+    def _is_windows_autostart_enabled() -> bool:
+        if not sys.platform.startswith("win"):
+            return False
+        try:
+            import winreg  # type: ignore
+
+            run_key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
+            value_name = "ScreenshotTool"
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, run_key_path, 0, winreg.KEY_READ) as key:
+                winreg.QueryValueEx(key, value_name)
+            return True
+        except FileNotFoundError:
+            return False
+        except OSError:
+            # 权限/注册表异常时，不影响主功能
+            return False
+
+    def _set_windows_autostart(enabled: bool) -> None:
+        if not sys.platform.startswith("win"):
+            return
+        try:
+            import winreg  # type: ignore
+
+            run_key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
+            value_name = "ScreenshotTool"
+            with winreg.CreateKey(winreg.HKEY_CURRENT_USER, run_key_path) as key:
+                if enabled:
+                    winreg.SetValueEx(key, value_name, 0, winreg.REG_SZ, _get_autostart_command())
+                else:
+                    try:
+                        winreg.DeleteValue(key, value_name)
+                    except FileNotFoundError:
+                        pass
+        except OSError:
+            # 权限/注册表异常时，不影响主功能
+            pass
+
+    def on_tray_toggle_autostart(icon, item):
+        """切换开机自启"""
+        def toggle():
+            _set_windows_autostart(not _is_windows_autostart_enabled())
+        root.after(0, toggle)
+
     def on_tray_exit(icon, item):
         """退出程序"""
         icon.visible = False
@@ -356,6 +442,12 @@ def main():
             '自动保存',
             on_tray_toggle_auto_save,
             checked=lambda item: app.auto_save.get()
+        ),
+        pystray.MenuItem(
+            '开机自启',
+            on_tray_toggle_autostart,
+            checked=lambda item: _is_windows_autostart_enabled(),
+            enabled=lambda item: sys.platform.startswith("win"),
         ),
         pystray.MenuItem('退出程序', on_tray_exit)
     )
