@@ -12,14 +12,13 @@ import os
 import subprocess
 import sys
 import tempfile
-from datetime import datetime
 
 # 项目目录
 PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 os.chdir(PROJECT_DIR)
 
 # 版本号
-VERSION = "1.2.2"
+VERSION = "2.3.0"
 
 # GitHub信息
 GITHUB_URL = "https://github.com/JIMGAN1/screenshot-tool"
@@ -31,8 +30,6 @@ def create_temp_version_file(version):
     version_parts = version.split('.')
     while len(version_parts) < 4:
         version_parts.append('0')
-    # 获取当前年份
-    current_year = datetime.now().year
     
     # 创建临时文件 - 指定在当前目录
     temp_file = tempfile.NamedTemporaryFile(
@@ -102,17 +99,23 @@ def build():
 
     cmd = [
         sys.executable,
-        "-m",
-        "PyInstaller",
-        "--onefile",  # 单文件
-        "--noconsole",  # GUI 模式，不弹出控制台
-        "--name",
-        "ScreenshotTool",  # 输出文件名
-        "--clean",  # 清理临时文件
-        "--noconfirm",  # 不询问覆盖
-        "--strip",  # 去除调试符号，减小体积
-        "--version-file", version_file,  # 使用临时文件
+        "-m", "PyInstaller",
+        "--onefile",          # 单文件 EXE
+        "--noconsole",        # GUI 模式，不弹出控制台
+        "--name", "ScreenshotTool",     # 输出文件名
+        "--clean",            # 清理临时文件
+        "--noconfirm",        # 不询问覆盖
+        "--strip",            # 去除调试符号，减小体积
+        "--version-file", version_file,  # 使用临时版本信息文件
     ]
+
+    # 为了让 EXE 更精简，显式排除项目中未使用的常见大体积模块
+    # 如果未来真的需要用到这些模块，再从这里移除即可。
+    excluded_modules = [
+        "numpy",        # requirements 中已删除，确保不会被误打包
+    ]
+    for m in excluded_modules:
+        cmd += ["--exclude-module", m]
 
     # 图标可选：如果同目录下有 JT.ico 则使用图标
     icon_path = os.path.join(PROJECT_DIR, "JT.ico")

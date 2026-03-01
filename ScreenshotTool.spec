@@ -10,7 +10,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=['numpy'],
     noarchive=False,
     optimize=0,
 )
@@ -35,6 +35,6 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    version='D:\\SourceCode\\PY\\screenshot_tool\\version_lkfve6ks.txt',
+    version='D:\\SourceCode\\PY\\screenshot_tool\\version_a32t9xrp.txt',
     icon=['D:\\SourceCode\\PY\\screenshot_tool\\JT.ico'],
 )

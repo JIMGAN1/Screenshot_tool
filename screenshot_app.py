@@ -221,7 +221,8 @@ class ScreenshotApp:
                 )
 
             # 把预先截好的底图传给覆盖层，后续所有取色/放大都基于这张图
-            overlay = CaptureOverlay(self.root, on_capture, on_cancel, base_image)
+            # 保留引用，避免对象被GC导致事件回调失效
+            self.overlay = CaptureOverlay(self.root, on_capture, on_cancel, base_image)
         except Exception as e:
             print(f"创建覆盖层失败：{e}")
             self._on_capture_error(str(e))
