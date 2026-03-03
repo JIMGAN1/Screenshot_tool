@@ -1428,7 +1428,7 @@ class CaptureOverlay:
 
             center_x = (x1 + x2) // 2
             center_y = (y1 + y2) // 2
-            rect_height = int((y2 - y1) * 0.8)
+            rect_height = int((y2 - y1) * 0.5)  # 初始滚动量设置为框选区域高度的50%，后续根据重叠行数调整
             # screen_x = self.root.winfo_rootx() + center_x
             # screen_y = self.root.winfo_rooty() + center_y
 
