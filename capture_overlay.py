@@ -13,6 +13,7 @@ import os
 import ctypes
 import pyautogui
 import threading
+from numpy import asarray, abs, int16
 
 
 
@@ -1218,65 +1219,20 @@ class CaptureOverlay:
         # 等待滚动动画完成（减少等待时间以提高响应速度）
         sleep(0.01)
 
-    # 将图片转换为二值图
-    def _convert_to_binary(self, img1):
-        """将图片转换为二值图"""
-        # 1. 灰度化
-        img2 = img1.convert('L')
-        
-        # 2. 降噪
-        img2 = img2.filter(ImageFilter.MedianFilter())
+    def _regions_similar(self, r1, r2, pixel_diff_threshold):
+        """
+        模糊判断两个灰度区域是否“足够相似”
+        - pixel_diff_threshold: 单个像素允许的灰度差
+        """
+        a1 = asarray(r1, dtype=int16)
+        a2 = asarray(r2, dtype=int16)
+        if a1.shape != a2.shape:
+            return False
 
-        # 3. 增强对比度
-        img2 = img2.point(lambda p: p * 1.2)
-         # 获取像素数据
-        pixels = list(img2.getdata())
-        width, height = img2.size
-
-        # 计算直方图
-        hist = [0] * 256
-        for p in pixels:
-            hist[p] += 1
-
-        total_pixels = width * height
-
-        # OTSU算法
-        sum_total = 0
-        for t in range(256):
-            sum_total += t * hist[t]
-
-        sum_bg = 0
-        weight_bg = 0
-        weight_fg = 0
-        max_variance = 0
-        best_threshold = 0
-
-        for t in range(256):
-            weight_bg += hist[t]
-            if weight_bg == 0:
-                continue
-            
-            weight_fg = total_pixels - weight_bg
-            if weight_fg == 0:
-                break
-            
-            sum_bg += t * hist[t]
-
-            mean_bg = sum_bg / weight_bg
-            mean_fg = (sum_total - sum_bg) / weight_fg
-
-            # 计算类间方差
-            variance = weight_bg * weight_fg * (mean_bg - mean_fg) ** 2
-
-            if variance > max_variance:
-                max_variance = variance
-                best_threshold = t
-        # best_threshold=80
-        print("best_threshold", best_threshold)
-        # 应用阈值
-        binary = img2.point(lambda p: 255 if p > best_threshold else 0)
-        img2 = binary
-        return img2
+        diff = abs(a1 - a2)
+        # 灰度差 <= pixel_diff_threshold 的像素比例
+        same_ratio = (diff <= pixel_diff_threshold).sum() / diff.size
+        return same_ratio
 
     def _find_top_same(self, img1, img2):
         """
@@ -1294,12 +1250,10 @@ class CaptureOverlay:
 
         # 设置最大搜索范围
         max_search = min(h1, h2)
-        # 转换为二值图
-        # img1, img2 = self._convert_to_binary(img1), self._convert_to_binary(img2)
-        # 顶部是否有相同区域
+
         top_same = 0
         overlap = 0
-        for overlap in range(1, max_search+1, 1):
+        for overlap in range(1, max_search + 1):
              # 从img1顶部取overlap行
             bottom_region = img1.crop((0, 0, w1, overlap))
             # 从img2顶部取overlap行
@@ -1335,12 +1289,12 @@ class CaptureOverlay:
         max_search = min(h1, h2)
         overlap = 0
         # 从img2底部开始，逐行向上检查
-        for overlap in range(1, max_search+1, 1):
+        for overlap in range(1, max_search + 1):
             # 从img1底部取overlap行
             bottom_region = img1.crop((0, h1 - overlap, w1, h1))
             # 从img2顶部取overlap行
             top_region = img2.crop((0, 0, w2, overlap))
-            # 比较两个区域是否完全相同
+            #比较两个区域是否完全相同
             if ImageChops.difference(bottom_region, top_region).getbbox() is None:
                 if overlap < 50:
                     gray = bottom_region.convert("L")
@@ -1354,8 +1308,24 @@ class CaptureOverlay:
                 else:
                     # print(f"检测到重叠: {overlap}行{max_search}")
                     return overlap
-        # print(f"未检测到重叠，已检查 {overlap} 行{h1}|{h2}") 
 
+        # 2. 精确没通过时，用模糊判断做补充
+        #    这里依然跳过纯色区域，避免大块空白页误拼接
+        overlap = 0
+        for overlap in range(1, max_search + 1):
+            # 从img1底部取overlap行
+            bottom_region = img1.crop((0, h1 - overlap, w1, h1))
+            # 从img2顶部取overlap行
+            top_region = img2.crop((0, 0, w2, overlap))
+            if overlap >= 50:
+                # pixel_diff_threshold：判断单个像素是否相似的"容忍度" same_ratio：整个图像中满足条件的像素所占的比例
+                same_ratio = self._regions_similar(bottom_region, top_region, pixel_diff_threshold=20)
+                if same_ratio >= 0.980:
+                    # print(f"使用模糊匹配检测到重叠: {same_ratio}{overlap} 行{h1}|{h2}")
+                    return overlap
+
+
+        print(f"未检测到重叠，已检查 {overlap} 行{h1}|{h2}") 
         return 0
 
     def _stitch_images(self, base_image, new_image, scroll_unit_pixels):
@@ -1428,14 +1398,21 @@ class CaptureOverlay:
 
             center_x = (x1 + x2) // 2
             center_y = (y1 + y2) // 2
-            rect_height = int((y2 - y1) * 0.2)  # 初始滚动量设置为框选区域高度的20%，后续根据重叠行数调整
+
             # screen_x = self.root.winfo_rootx() + center_x
             # screen_y = self.root.winfo_rooty() + center_y
 
             # # 移动到框选区域中心
             # pyautogui.moveTo(screen_x, screen_y)
 
-            self.scroll_unit_pixels = rect_height #后续再根据重叠行数调整
+            # 根据框选区域高度动态调整滚动单位像素数(反比例函数)，避免过大导致错过内容，过小导致滚动过慢
+            # reciprocal_ratio = 1 - (y2-y1) / self.root.winfo_screenheight()
+            # print(f"反比例: {reciprocal_ratio}|{self.root.winfo_screenheight()}|{(y2-y1)}")
+            # 后续更加根据重叠行数再次调整滚动单位像素数
+            # rect_height = int(reciprocal_ratio * (y2-y1)*0.1 + (y2-y1)*0.2 + (1-reciprocal_ratio) * (y2-y1)*0.1)
+            rect_height = int((y2-y1)*0.3)
+            print(f"计算出的滚动单位像素数: {rect_height}|{(y2-y1)}")
+            self.scroll_unit_pixels = rect_height
             # 截取第一张图片
             first_image_full = self._capture_region()
             if not first_image_full:
@@ -1508,16 +1485,21 @@ class CaptureOverlay:
                         try:
                             # 截取顶部相同区域
                             top_same = self._find_top_same(current_image, new_image)
-
-                            new_image1 = new_image.crop((0, top_same+20, new_image.width, new_image.height))
-    
-                            #第一次运行确定安全滚动量
+                            if top_same != 0:
+                                new_image1 = new_image.crop((0, top_same+20, new_image.width, new_image.height))
+                            else:
+                                new_image1 = new_image
+                            #确定安全滚动量
                             if if_unit_pixels == False:
                                 overlap_rows = self._find_overlap_rows(current_image, new_image1)
-                                if overlap_rows != 0:
-                                    self.scroll_unit_pixels = int(self.scroll_unit_pixels + overlap_rows)
+                                if self.scroll_unit_pixels is None:
+                                    self.scroll_unit_pixels = int(overlap_rows*0.3)
+                                if overlap_rows >= 50:
+                                    self.scroll_unit_pixels = int(self.scroll_unit_pixels + overlap_rows*0.3)
+                                elif 0 < overlap_rows < 50:
                                     if_unit_pixels  = True
-                                # print(f"确定安全滚动量: {self.scroll_unit_pixels}|{overlap_rows}|{rect_height}")
+
+                                # print(f"确定安全滚动量: {self.scroll_unit_pixels}|{overlap_rows}|{(y2-y1)}|{if_unit_pixels}")
                             # 检测重叠行数
                             else:
                                 overlap_rows = self._find_overlap_rows(current_image, new_image1)

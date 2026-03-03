@@ -5,3 +5,4 @@ pywin32>=306; platform_system=="Windows"
 pyinstaller>=6.0.0
 pystray>=0.19.4
 pyautogui>=0.9.54
+numpy>=1.21,<2.0

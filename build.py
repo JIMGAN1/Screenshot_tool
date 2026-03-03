@@ -109,13 +109,7 @@ def build():
         "--version-file", version_file,  # 使用临时版本信息文件
     ]
 
-    # 为了让 EXE 更精简，显式排除项目中未使用的常见大体积模块
-    # 如果未来真的需要用到这些模块，再从这里移除即可。
-    excluded_modules = [
-        "numpy",        # requirements 中已删除，确保不会被误打包
-    ]
-    for m in excluded_modules:
-        cmd += ["--exclude-module", m]
+
 
     # 图标可选：如果同目录下有 JT.ico 则使用图标
     icon_path = os.path.join(PROJECT_DIR, "JT.ico")
