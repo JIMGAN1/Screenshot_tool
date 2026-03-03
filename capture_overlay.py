@@ -1014,7 +1014,7 @@ class CaptureOverlay:
         x1, y1, x2, y2 = self.long_capture_rect
         
         # 计算预览窗口尺寸（限制最大尺寸，默认宽度减少一半）
-        max_preview_width = self.root.winfo_screenwidth() // 6
+        max_preview_width = self.root.winfo_screenwidth() // 8
         max_preview_height = self.root.winfo_screenheight()
         
         # 如果图片尺寸超过最大限制，则缩放；否则使用图片实际尺寸
@@ -1428,7 +1428,7 @@ class CaptureOverlay:
 
             center_x = (x1 + x2) // 2
             center_y = (y1 + y2) // 2
-            rect_height = int((y2 - y1) * 0.5)  # 初始滚动量设置为框选区域高度的50%，后续根据重叠行数调整
+            rect_height = int((y2 - y1) * 0.2)  # 初始滚动量设置为框选区域高度的20%，后续根据重叠行数调整
             # screen_x = self.root.winfo_rootx() + center_x
             # screen_y = self.root.winfo_rooty() + center_y
 
