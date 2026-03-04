@@ -1226,7 +1226,7 @@ class CaptureOverlay:
         if dynamic_region_ratio is None:
             dynamic_region_ratio = getattr(self, "dynamic_region_ratio", 0.3)
         # 动态区域的额外容错阈值，例如基础阈值 25，则动态区内阈值为 25 + 40 = 65
-        dynamic_extra_threshold = getattr(self, "dynamic_extra_threshold", 45)
+        dynamic_extra_threshold = getattr(self, "dynamic_extra_threshold", 50)
 
         a1 = asarray(r1, dtype=int16)
         a2 = asarray(r2, dtype=int16)
@@ -1644,7 +1644,7 @@ class CaptureOverlay:
             
             self.stitched_image = first_image
             scroll_count = 0
-            max_scrolls = 100  # 防止无限循环
+            max_scrolls = 1000  # 防止无限循环
             no_change_count = 0  # 连续无变化次数
             current_image = first_image  # 用于比较的上一张图片
             
@@ -1674,7 +1674,7 @@ class CaptureOverlay:
                     diff = ImageChops.difference(new_image, current_image)
                     if diff.getbbox() is None:
                         no_change_count += 1
-                        # print(f"图片相同, 已停止滚动")
+                        print(f"图片相同, 已停止滚动")
                         # 当检测到没有变化时，截取框选区域底部到应用程序底部的剩余部分
                         if no_change_count >= 1:
                             remaining_image = self._capture_remaining_region()
@@ -1765,6 +1765,7 @@ class CaptureOverlay:
 
             # 完成长截图
             # 即使被取消，如果有已拼接的图片，也要保存和复制
+            print("完成长截图循环，准备保存")
             if self.stitched_image and not self._long_finish_called:
                 self._long_finish_called = True
                 self.root.after(0, self._finish_long_capture)
