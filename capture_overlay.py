@@ -1701,7 +1701,7 @@ class CaptureOverlay:
                             # 截取顶部相同区域
                             top_same = self._find_top_same(current_image, new_image)
                             if top_same != 0:
-                                new_image1 = new_image.crop((0, top_same+20, new_image.width, new_image.height))
+                                new_image1 = new_image.crop((0, top_same+15, new_image.width, new_image.height))
                             else:
                                 new_image1 = new_image
                             #确定安全滚动量
