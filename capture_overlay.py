@@ -4,6 +4,7 @@
 from time import sleep
 import tkinter as tk
 from PIL import Image, ImageFilter, ImageGrab, ImageTk, ImageChops
+from numpy import argsort, asarray, abs, int16, mean, where, zeros_like
 import mss
 import pyperclip
 import win32gui
@@ -13,8 +14,6 @@ import os
 import ctypes
 import pyautogui
 import threading
-from numpy import asarray, abs, int16
-
 
 
 class CaptureOverlay:
@@ -1187,7 +1186,7 @@ class CaptureOverlay:
         
         return image
 
-    def _simulate_scroll(self, x, y, scroll_amount=100):
+    def _simulate_scroll(self, rollback_unit_pixels,  x, y, scroll_amount=-100):
         """在指定位置模拟鼠标滚轮"""
         # 转换为屏幕绝对坐标
         screen_x = self.root.winfo_rootx() + x
@@ -1205,33 +1204,239 @@ class CaptureOverlay:
 
         # 使用pyautogui模拟滚轮
         pyautogui.moveTo(screen_x, screen_y)
-        pyautogui.scroll(scroll_amount, x=screen_x, y=screen_y)
-        # win32api.mouse_event(win32con.MOUSEEVENTF_WHEEL, screen_x, screen_y, scroll_amount, 0)
-
-        # try:
-        #     # self.root.attributes('-alpha', original_alpha)
-        #     if hasattr(self, 'preview_window') and self.preview_window:
-        #         self.preview_window.deiconify()
-        # except Exception:
-        #     pass
-
+        if rollback_unit_pixels != 0:
+            pyautogui.scroll(rollback_unit_pixels, x=screen_x, y=screen_y)
+        else:
+            pyautogui.scroll(scroll_amount, x=screen_x, y=screen_y)
 
         # 等待滚动动画完成（减少等待时间以提高响应速度）
         sleep(0.01)
 
-    def _regions_similar(self, r1, r2, pixel_diff_threshold):
+    def _regions_similar(self, r1, r2, same_ratio_value, pixel_diff_threshold, dynamic_region_ratio=None):
         """
         模糊判断两个灰度区域是否“足够相似”
         - pixel_diff_threshold: 单个像素允许的灰度差
+        - dynamic_region_ratio: 允许被视为“动态区域”的最大占比（0~1），例如 0.3 表示最多 30%
+        
+        设计目标：
+        - 适配微信聊天窗口中局部动图（如表情/GIF）导致的小区域差异
+        - 自动识别差异主要集中区域时，将该区域视为“动态容错区”，在该区域内自动放宽像素差阈值
         """
+        # 默认允许最多 30% 区域作为动态区域，可通过实例属性覆盖
+        if dynamic_region_ratio is None:
+            dynamic_region_ratio = getattr(self, "dynamic_region_ratio", 0.3)
+        # 动态区域的额外容错阈值，例如基础阈值 25，则动态区内阈值为 25 + 40 = 65
+        dynamic_extra_threshold = getattr(self, "dynamic_extra_threshold", 45)
+
         a1 = asarray(r1, dtype=int16)
         a2 = asarray(r2, dtype=int16)
         if a1.shape != a2.shape:
             return False
 
         diff = abs(a1 - a2)
-        # 灰度差 <= pixel_diff_threshold 的像素比例
-        same_ratio = (diff <= pixel_diff_threshold).sum() / diff.size
+        total_pixels = diff.size
+        if total_pixels == 0:
+            return False
+
+        # 基础相似判定：灰度差在基础阈值以内的像素
+        base_similar = diff <= pixel_diff_threshold
+
+        # 如果本身就几乎完全相同，直接返回
+        base_same_ratio = base_similar.sum() / total_pixels
+        # 这里不直接返回 1.0，而是保留真实比例，后面仍可根据动态区域逻辑做微调
+        if base_same_ratio >= same_ratio_value:
+            return base_same_ratio
+
+        # 找出“明显不同”的像素（可能是动图/闪烁区域）
+        diff_mask = ~base_similar
+        diff_count = diff_mask.sum()
+        if diff_count == 0:
+            # 理论上不会走到这里，因为上面 base_same_ratio 已覆盖，但为了安全保留
+            return base_same_ratio
+
+        # 基本的差异占比
+        diff_ratio = diff_count / total_pixels
+
+        # -----------------------------
+        # 情况 1：整体差异非常大 → 直接认为整体变化，连通域直接跳过
+        # -----------------------------
+        # 这里乘以 2 是经验值：允许“比设定动态区域阈值再大一倍”的情况仍进入连通域判断
+        # 例如 dynamic_region_ratio=0.3，则 diff_ratio>0.6 时直接认为整体变化
+        if diff_ratio > dynamic_region_ratio * 2:
+            return base_same_ratio
+
+        # -----------------------------
+        # 情况 2：差异整体不大，且可以近似看成“一个动态区域”
+        #       → 不做连通域，只按整体包围盒处理一次
+        # -----------------------------
+        h, w = diff_mask.shape
+        ys, xs = diff_mask.nonzero()
+        if ys.size > 0:
+            y_min, y_max = ys.min(), ys.max()
+            x_min, x_max = xs.min(), xs.max()
+            bbox_area = int((y_max - y_min + 1) * (x_max - x_min + 1))
+
+            # 如果所有差异几乎都集中在一个紧凑区域（稀疏度不高），可以把它当作“单一动态区域”
+            # sparse_ratio 越接近 1，说明 bbox 里大部分像素都是差异像素
+            sparse_ratio = diff_count / max(bbox_area, 1)
+            if diff_ratio <= dynamic_region_ratio and sparse_ratio >= 0.7:
+                dynamic_threshold = pixel_diff_threshold + dynamic_extra_threshold
+                refined_similar = base_similar.copy()
+
+                sub_mask = diff_mask[y_min : y_max + 1, x_min : x_max + 1]
+                if sub_mask.any():
+                    sub_diff = diff[y_min : y_max + 1, x_min : x_max + 1]
+                    local_dyn = sub_diff <= dynamic_threshold
+                    update_mask = sub_mask & local_dyn
+                    refined_similar[y_min : y_max + 1, x_min : x_max + 1][update_mask] = True
+
+                same_ratio = refined_similar.sum() / total_pixels
+                return same_ratio
+
+        # -----------------------------
+        # 情况 3：确实存在多个动态块 → 使用简单近似版（投影切分）
+        # -----------------------------
+
+        # 简单近似版：使用按行/按列投影 + 阈值切分快速粗分多个区块
+        def _find_regions_by_projection(mask, min_area=225, max_components=3, gap_threshold=50):
+            """
+            使用投影方法快速切分区块，比完整连通域算法更快
+            - gap_threshold: 距离大于此值（像素）算不同区块，默认50
+            - max_components: 最多返回几个区块，默认3
+            """
+            h, w = mask.shape
+            if h == 0 or w == 0:
+                return []
+            
+            # 按行投影：统计每行有多少True像素
+            row_proj = mask.sum(axis=1)  # shape: (h,)
+            # 按列投影：统计每列有多少True像素
+            col_proj = mask.sum(axis=0)  # shape: (w,)
+            
+            # 找到投影值>0的连续区间（行区间），直接使用列表避免后续转换
+            row_intervals = []  # [[start_row, end_row], ...]
+            in_interval = False
+            start_row = 0
+            for i in range(h):
+                if row_proj[i] > 0:
+                    if not in_interval:
+                        start_row = i
+                        in_interval = True
+                else:
+                    if in_interval:
+                        row_intervals.append([start_row, i - 1])
+                        in_interval = False
+            if in_interval:
+                row_intervals.append([start_row, h - 1])
+            
+            # 找到投影值>0的连续区间（列区间），直接使用列表避免后续转换
+            col_intervals = []  # [[start_col, end_col], ...]
+            in_interval = False
+            start_col = 0
+            for i in range(w):
+                if col_proj[i] > 0:
+                    if not in_interval:
+                        start_col = i
+                        in_interval = True
+                else:
+                    if in_interval:
+                        col_intervals.append([start_col, i - 1])
+                        in_interval = False
+            if in_interval:
+                col_intervals.append([start_col, w - 1])
+            
+            if not row_intervals or not col_intervals:
+                return []
+            
+            # 合并距离较近的行区间（距离<=gap_threshold的合并）
+            merged_row_intervals = [row_intervals[0][:]]  # 复制第一个区间
+            for i in range(1, len(row_intervals)):
+                prev_end = merged_row_intervals[-1][1]
+                curr_start = row_intervals[i][0]
+                if curr_start - prev_end <= gap_threshold:
+                    # 合并：更新当前最后一个区间的结束位置
+                    merged_row_intervals[-1][1] = row_intervals[i][1]
+                else:
+                    # 新区间：添加新区间
+                    merged_row_intervals.append(row_intervals[i][:])
+            
+            # 合并距离较近的列区间（距离<=gap_threshold的合并）
+            merged_col_intervals = [col_intervals[0][:]]  # 复制第一个区间
+            for i in range(1, len(col_intervals)):
+                prev_end = merged_col_intervals[-1][1]
+                curr_start = col_intervals[i][0]
+                if curr_start - prev_end <= gap_threshold:
+                    # 合并：更新当前最后一个区间的结束位置
+                    merged_col_intervals[-1][1] = col_intervals[i][1]
+                else:
+                    # 新区间：添加新区间
+                    merged_col_intervals.append(col_intervals[i][:])
+            
+            # 根据行区间和列区间的组合，快速划分区块
+            # 每个 (row_interval, col_interval) 组合形成一个候选区块
+            candidate_regions = []  # [(area, (y_min, y_max, x_min, x_max)), ...]
+            
+            for y_min, y_max in merged_row_intervals:
+                for x_min, x_max in merged_col_intervals:
+                    # 计算这个区块内的实际True像素数量（面积）
+                    block_mask = mask[y_min:y_max+1, x_min:x_max+1]
+                    area = int(block_mask.sum())
+                    
+                    if area >= min_area:
+                        candidate_regions.append((area, (y_min, y_max, x_min, x_max)))
+            
+            # 如果候选区域太少，直接返回空
+            if not candidate_regions:
+                return []
+            
+            # 按面积从大到小排序，只保留最大的 max_components 个
+            candidate_regions.sort(key=lambda x: x[0], reverse=True)
+            return candidate_regions[:max_components]
+
+        # 使用简单近似版：投影切分，只取3个动态区间，距离大于50像素算不同区块
+        components = _find_regions_by_projection(diff_mask, min_area=225, max_components=3, gap_threshold=50)
+        if not components:
+            return base_same_ratio
+
+        # 统计所有"小块动态区域"的包围盒并计算整体动图占比
+        dynamic_threshold = pixel_diff_threshold + dynamic_extra_threshold
+        refined_similar = base_similar.copy()
+
+        total_dyn_pixels = 0  # 使用各连通块自己真实面积，而不是包围盒面积，比例更准确
+
+        for area, (y_min, y_max, x_min, x_max) in components:
+            # 使用真实像素数来算比例，而不是包围盒面积，避免两个很稀疏的块拉大占比
+            block_ratio = area / total_pixels
+
+            # 只把“小块”当作动态区域（<= dynamic_region_ratio）
+            if block_ratio <= dynamic_region_ratio:
+                total_dyn_pixels += area
+
+                # 一旦动态像素总量已经超过允许上限，就没必要继续细分，直接用基础相似度即可
+                if total_dyn_pixels / total_pixels > dynamic_region_ratio:
+                    return base_same_ratio
+
+                # 在该块的包围盒内，用更大的阈值重新判断
+                sub_mask = diff_mask[y_min : y_max + 1, x_min : x_max + 1]
+                if not sub_mask.any():
+                    continue
+                sub_diff = diff[y_min : y_max + 1, x_min : x_max + 1]
+
+                # 局部位置应用放宽阈值
+                local_dyn = sub_diff <= dynamic_threshold
+                # 只在差异像素位置上更新 refined_similar，避免误改本来就相似的像素
+                update_mask = sub_mask & local_dyn
+                refined_similar[y_min : y_max + 1, x_min : x_max + 1][update_mask] = True
+
+        # 如果所有动态区域加起来仍然只占小部分，则使用放宽后的相似度
+        if total_dyn_pixels > 0 and (total_dyn_pixels / total_pixels) <= dynamic_region_ratio:
+            same_ratio = refined_similar.sum() / total_pixels
+            # 调试时可以打开日志
+            # print(f"动态区域占比{total_dyn_pixels / total_pixels:.2%}|{same_ratio:.2%}")
+        else:
+            # 差异区域太大，认为不是局部动图，而是整体内容变化，直接用基础比例
+            same_ratio = base_same_ratio
+
         return same_ratio
 
     def _find_top_same(self, img1, img2):
@@ -1310,19 +1515,26 @@ class CaptureOverlay:
                     return overlap
 
         # 2. 精确没通过时，用模糊判断做补充
-        #    这里依然跳过纯色区域，避免大块空白页误拼接
         overlap = 0
         for overlap in range(1, max_search + 1):
             # 从img1底部取overlap行
             bottom_region = img1.crop((0, h1 - overlap, w1, h1))
             # 从img2顶部取overlap行
             top_region = img2.crop((0, 0, w2, overlap))
-            if overlap >= 50:
+
+            if overlap >= 20:
                 # pixel_diff_threshold：判断单个像素是否相似的"容忍度" same_ratio：整个图像中满足条件的像素所占的比例
-                same_ratio = self._regions_similar(bottom_region, top_region, pixel_diff_threshold=20)
-                if same_ratio >= 0.980:
-                    # print(f"使用模糊匹配检测到重叠: {same_ratio}{overlap} 行{h1}|{h2}")
-                    return overlap
+                same_ratio_value = 0.99
+                same_ratio = self._regions_similar(bottom_region, top_region, same_ratio_value, pixel_diff_threshold=20)
+                if same_ratio >= same_ratio_value:
+                    if overlap < 50:
+                        gray = bottom_region.convert("L")
+                        mn, mx = gray.getextrema()
+                        if mn == mx:
+                            continue
+                        return overlap
+                    else:
+                        return overlap
 
 
         print(f"未检测到重叠，已检查 {overlap} 行{h1}|{h2}") 
@@ -1391,7 +1603,9 @@ class CaptureOverlay:
                     left, top, right, bottom = win32gui.GetWindowRect(self.window_hwnd)
                     client_bottom_screen = bottom
                 except Exception:
-                    return None
+                    # 无法安全获取窗口底部，直接中止本次长截图
+                    self.root.after(0, self._cancel)
+                    return
 
             # 隐藏覆盖层
             self.root.attributes('-alpha', 0)
@@ -1405,12 +1619,14 @@ class CaptureOverlay:
             # # 移动到框选区域中心
             # pyautogui.moveTo(screen_x, screen_y)
 
-            # 根据框选区域高度动态调整滚动单位像素数(反比例函数)，避免过大导致错过内容，过小导致滚动过慢
-            # reciprocal_ratio = 1 - (y2-y1) / self.root.winfo_screenheight()
+            # 计算反比例因子：框选区域越高，因子越小
+            reciprocal_ratio = 1 - (y2-y1) / self.root.winfo_screenheight()
             # print(f"反比例: {reciprocal_ratio}|{self.root.winfo_screenheight()}|{(y2-y1)}")
-            # 后续更加根据重叠行数再次调整滚动单位像素数
-            # rect_height = int(reciprocal_ratio * (y2-y1)*0.1 + (y2-y1)*0.2 + (1-reciprocal_ratio) * (y2-y1)*0.1)
-            rect_height = int((y2-y1)*0.3)
+            #后续更加根据重叠行数动态调整滚动单位像素数
+            rect_height_ratio = int(reciprocal_ratio * (y2-y1)*0.7 + (y2-y1)*0.3)
+            rect_height = min(rect_height_ratio,int((y2-y1)*0.5))
+
+
             print(f"计算出的滚动单位像素数: {rect_height}|{(y2-y1)}")
             self.scroll_unit_pixels = rect_height
             # 截取第一张图片
@@ -1431,23 +1647,21 @@ class CaptureOverlay:
             max_scrolls = 100  # 防止无限循环
             no_change_count = 0  # 连续无变化次数
             current_image = first_image  # 用于比较的上一张图片
-            self._match_y_history = []  # 初始化匹配位置历史
             
             # 更新预览
             self.root.after(0, lambda: self._show_preview(self.stitched_image))
             # self._show_preview(self.stitched_image)
             overlap_rows = 0
             if_unit_pixels = False
+            rollback_unit_pixels = 0
             # 滚动循环
             while scroll_count < max_scrolls and not self.long_capture_cancelled:
                 # 检查取消标志（在每次循环开始时立即检查）
                 if self.long_capture_cancelled:
                     break
                 
-                # if overlap_rows == 0:
-                #     self._simulate_scroll(center_x, center_y, scroll_amount=-rect_height)
-                # else:
-                self._simulate_scroll(center_x, center_y, scroll_amount=-self.scroll_unit_pixels)
+                #rollback_unit_pixels不等于0时进行回滚操作
+                self._simulate_scroll(rollback_unit_pixels, center_x, center_y, scroll_amount=-self.scroll_unit_pixels)
                 # print(f"正常滚动: {self.scroll_unit_pixels}")
                 
                 # 截取滚动后的图片
@@ -1466,7 +1680,7 @@ class CaptureOverlay:
                             remaining_image = self._capture_remaining_region()
                             if remaining_image:
                                 # 将剩余部分拼接到长截图最后
-                                remaining_width, remaining_height = remaining_image.size
+                                remaining_height = remaining_image.height
                                 if remaining_height > 0:  # 确保有内容
                                     # 直接拼接剩余部分
                                     base_width, base_height = self.stitched_image.size
@@ -1481,6 +1695,7 @@ class CaptureOverlay:
                                     # 更新预览
                                     self.root.after(0, lambda img=self.stitched_image: self._show_preview(img))
                                     break
+                            break
                     else:
                         try:
                             # 截取顶部相同区域
@@ -1494,12 +1709,20 @@ class CaptureOverlay:
                                 overlap_rows = self._find_overlap_rows(current_image, new_image1)
                                 if self.scroll_unit_pixels is None:
                                     self.scroll_unit_pixels = int(overlap_rows*0.3)
+                                
                                 if overlap_rows >= 50:
-                                    self.scroll_unit_pixels = int(self.scroll_unit_pixels + overlap_rows*0.3)
+                                    self.scroll_unit_pixels = int(self.scroll_unit_pixels + int(min(reciprocal_ratio*overlap_rows*0.7+overlap_rows*0.3,overlap_rows*0.5)))
+                                    rollback_unit_pixels = 0
                                 elif 0 < overlap_rows < 50:
                                     if_unit_pixels  = True
+                                    rollback_unit_pixels = 0
+                                if overlap_rows == 0 and no_change_count <= 3:
+                                    if_unit_pixels = False
+                                    rollback_unit_pixels = int(self.scroll_unit_pixels/3)
+                                    self.scroll_unit_pixels = self.scroll_unit_pixels - rollback_unit_pixels
+                                    print(f"回滚：{rollback_unit_pixels}")
 
-                                # print(f"确定安全滚动量: {self.scroll_unit_pixels}|{overlap_rows}|{(y2-y1)}|{if_unit_pixels}")
+                                # print(f"确定安全滚动量: {self.scroll_unit_pixels}|{overlap_rows}|{(y2-y1)}|{if_unit_pixels}|{top_same}")
                             # 检测重叠行数
                             else:
                                 overlap_rows = self._find_overlap_rows(current_image, new_image1)
@@ -1509,10 +1732,10 @@ class CaptureOverlay:
                             else:
                                 no_change_count = 0
                             
-                            new_image1 = new_image1.crop((0, overlap_rows, new_image1.width, new_image1.height))
-                            # 拼接图片
-                            self.stitched_image = self._stitch_images(self.stitched_image, new_image1, new_image1.height)
-                            self.root.after(0, lambda img=self.stitched_image: self._show_preview(img))
+                                new_image1 = new_image1.crop((0, overlap_rows, new_image1.width, new_image1.height))
+                                # 拼接图片
+                                self.stitched_image = self._stitch_images(self.stitched_image, new_image1, new_image1.height)
+                                self.root.after(0, lambda img=self.stitched_image: self._show_preview(img))
                             
 
                         except Exception as e:
@@ -1526,12 +1749,13 @@ class CaptureOverlay:
                     scroll_count += 1
                     continue
 
-                if no_change_count >= 10:
+                if no_change_count >= 4:
                     print(f"连续多次无重叠: {no_change_count}")
                     break
 
                 # 更新current_image为new_image，用于下次迭代的比较
-                current_image = new_image
+                if overlap_rows != 0:
+                    current_image = new_image
                 
                 scroll_count += 1
                 
