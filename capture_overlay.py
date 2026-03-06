@@ -1908,7 +1908,7 @@ class CaptureOverlay:
                             else:
                                 new_image1 = new_image
                             
-                            max_search = self.scroll_unit_pixels
+                            max_search = rect_height
                             #确定安全滚动量
                             if if_unit_pixels == False:
                                 overlap_rows = self._find_overlap_rows(current_image, new_image1, max_search)
@@ -1926,9 +1926,9 @@ class CaptureOverlay:
                                     if_unit_pixels = False
                                     rollback_unit_pixels = int(self.scroll_unit_pixels/3)
                                     self.scroll_unit_pixels = self.scroll_unit_pixels - rollback_unit_pixels
-                                    # print(f"回滚：{rollback_unit_pixels}")
+                                    print(f"回滚：{rollback_unit_pixels}")
 
-                                # print(f"确定安全滚动量: {self.scroll_unit_pixels}|{overlap_rows}|{(y2-y1)}|{if_unit_pixels}|{top_same}")
+                                print(f"确定安全滚动量: {self.scroll_unit_pixels}|{overlap_rows}|{(y2-y1)}|{if_unit_pixels}|{top_same}")
                             # 检测重叠行数
                             else:
                                 overlap_rows = self._find_overlap_rows(current_image, new_image1, max_search)
