@@ -1,20 +1,53 @@
 """
 快捷截图 - 框选覆盖层模块
 """
-from time import sleep
+from time import perf_counter, sleep
 import tkinter as tk
-from PIL import Image, ImageFilter, ImageGrab, ImageTk, ImageChops
-from numpy import argsort, asarray, abs, int16, mean, where, zeros_like
+from PIL import Image, ImageGrab, ImageTk, ImageChops
+from numpy import asarray, int16
 import mss
-import pyperclip
+from utils import copy_text_to_clipboard
 import win32gui
 import win32con
 import win32process
 import os
 import ctypes
-import pyautogui
+from ctypes import wintypes
+# import pyautogui
 import threading
 
+# Windows API 常量
+MOUSEEVENTF_WHEEL = 0x0800
+INPUT_MOUSE = 0
+
+# Windows API 结构体
+class MOUSEINPUT(ctypes.Structure):
+    _fields_ = [
+        ("dx", wintypes.LONG),
+        ("dy", wintypes.LONG),
+        ("mouseData", wintypes.DWORD),
+        ("dwFlags", wintypes.DWORD),
+        ("time", wintypes.DWORD),
+        ("dwExtraInfo", wintypes.LPARAM), 
+    ]
+
+class INPUT(ctypes.Structure):
+    class _INPUT(ctypes.Union):
+        _fields_ = [("mi", MOUSEINPUT)]
+    _anonymous_ = ("_input",)
+    _fields_ = [
+        ("type", wintypes.DWORD),
+        ("_input", _INPUT),
+    ]
+
+# 获取 Windows API 函数
+SendInput = ctypes.windll.user32.SendInput
+SendInput.argtypes = [ctypes.c_uint, ctypes.POINTER(INPUT), ctypes.c_int]
+SendInput.restype = ctypes.c_uint  # 返回实际发送的输入数量
+# 在文件开头添加 GetLastError
+kernel32 = ctypes.windll.kernel32
+GetLastError = kernel32.GetLastError
+GetLastError.restype = ctypes.c_uint
 
 class CaptureOverlay:
     """全屏框选覆盖层"""
@@ -328,7 +361,7 @@ class CaptureOverlay:
     def _copy_info(self):
         """复制坐标和颜色到剪切板"""
         info = f"{self.current_x}|{self.current_y}\n{self.current_color}"
-        pyperclip.copy(info)
+        copy_text_to_clipboard(info)
 
     def _on_right_click(self, event):
         """右键取消截图并复制坐标和颜色"""
@@ -897,8 +930,9 @@ class CaptureOverlay:
         # 使用框选区域中心点识别窗口
         center_x = (x1 + x2) // 2
         center_y = (y1 + y2) // 2
-        
+
         window_rect = self._identify_window_under_cursor(center_x, center_y)
+
         if window_rect and self.window_hwnd:
             return self.window_hwnd
         return None
@@ -1186,12 +1220,91 @@ class CaptureOverlay:
         
         return image
 
-    def _simulate_scroll(self, rollback_unit_pixels,  x, y, scroll_amount=-100):
+    def get_mouse_scroll_lines_api(self):
+        """获取鼠标滚轮滚动行数，失败默认返回3"""
+        SPI_GETWHEELSCROLLLINES = 0x0068
+        lines = wintypes.UINT()
+
+        result = ctypes.windll.user32.SystemParametersInfoW(
+            SPI_GETWHEELSCROLLLINES,
+            0,
+            ctypes.byref(lines),
+            0
+        )
+
+        return lines.value if result else 3
+    
+    def _wait_scroll_stable(self, timeout=0.3, interval=0.005):
+        """
+        等待滚动动画结束：高频轮询截图，检测画面是否稳定。
+        只截取框选区域中间一小条像素（10行），用 mss + bytes 直接比较，
+        避免 numpy 开销，响应时间可达 ~10ms。
+        
+        - interval: 轮询间隔（秒），默认 5ms
+        - timeout: 最大等待时间（秒），默认 0.3s 兜底
+        """
+        if not self.long_capture_rect:
+            sleep(0.01)
+            return
+
+        x1, y1, x2, y2 = self.long_capture_rect
+        screen_x = self.root.winfo_rootx()
+        screen_y = self.root.winfo_rooty()
+
+        # 只截取中间 10 行像素的横条，极大减少截图数据量
+        region_h = y2 - y1
+        mid_y = y1 + region_h // 2
+        strip_half = 2  # 上下各 2 行，共 4 行
+        strip_top = screen_y + max(y1, mid_y - strip_half)
+        strip_bot = screen_y + min(y2, mid_y + strip_half)
+        strip_left = screen_x + x1
+        strip_right = screen_x + x2
+
+        monitor = {
+            "left": strip_left,
+            "top": strip_top,
+            "width": strip_right - strip_left,
+            "height": strip_bot - strip_top,
+        }
+
+        try:
+            with mss.mss() as sct:
+                # 滚动前的基准帧
+                baseline_bytes = bytes(sct.grab(monitor).rgb)
+                start = perf_counter()
+
+                # Phase 1: 等待画面开始变化（滚动开始渲染）
+                changed = False
+                while perf_counter() - start < timeout:
+                    sleep(interval)
+                    curr_bytes = bytes(sct.grab(monitor).rgb)
+                    if curr_bytes != baseline_bytes:
+                        changed = True
+                        prev_bytes = curr_bytes
+                        break
+
+                if not changed:
+                    # 超时仍未变化，可能滚动到底了或目标无响应，直接返回
+                    return
+
+                # Phase 2: 等待画面不再变化（滚动动画结束）
+                while perf_counter() - start < timeout:
+                    sleep(interval)
+                    curr_bytes = bytes(sct.grab(monitor).rgb)
+                    if curr_bytes == prev_bytes:
+                        # 画面已稳定，立即返回
+                        return
+                    prev_bytes = curr_bytes
+        except Exception as e:
+            # mss 异常时兜底
+            print(f"等待滚动动画完成异常: {e}")
+            sleep(0.01)
+
+    def _simulate_scroll(self, current_lines, rollback_unit_pixels,  x, y, pixels_amount=-100, target_hwnd=None):
         """在指定位置模拟鼠标滚轮"""
         # 转换为屏幕绝对坐标
         screen_x = self.root.winfo_rootx() + x
         screen_y = self.root.winfo_rooty() + y
-
 
         # try:
         #     # 隐藏预览窗口
@@ -1201,17 +1314,94 @@ class CaptureOverlay:
         #         self.preview_window.withdraw()
         # except Exception:
         #     pass
+        # # 使用pyautogui模拟滚轮
+        # pyautogui.moveTo(screen_x, screen_y)
+        # if rollback_unit_pixels != 0:
+        #     pyautogui.scroll(rollback_unit_pixels, x=screen_x, y=screen_y)
+        # else:
+        #     pyautogui.scroll(scroll_amount, x=screen_x, y=screen_y)
 
-        # 使用pyautogui模拟滚轮
-        pyautogui.moveTo(screen_x, screen_y)
-        if rollback_unit_pixels != 0:
-            pyautogui.scroll(rollback_unit_pixels, x=screen_x, y=screen_y)
+        # 使用 Windows SendInput API 模拟滚轮
+        # 移动鼠标到指定位置
+        # 如果提供了目标窗口句柄，先激活它
+        # 如果提供了目标窗口句柄，先验证它不是覆盖层窗口
+        # 添加调试输出 
+    
+        # 移动鼠标到指定位置
+        ctypes.windll.user32.SetCursorPos(int(screen_x), int(screen_y))
+
+        # 确定滚动单位像素数
+        pixels_amount = rollback_unit_pixels if rollback_unit_pixels != 0 else pixels_amount
+        
+        #鼠标默认行数是3，如果是其他值进行转换
+        mouse_data = int(pixels_amount * 3 / current_lines)
+        # print(f"滚动: {rollback_unit_pixels}|{pixels_amount}|{current_lines}|{mouse_data}")
+
+        # 如果提供了目标窗口句柄，用SendMessage发送滚轮消息
+        if target_hwnd:
+            # WM_MOUSEWHEEL 的 wParam 和 lParam 格式
+            # wParam: 高16位是滚轮增量（有符号16位整数），低16位是按键状态
+            # lParam: 低16位是 x 坐标（屏幕坐标），高16位是 y 坐标（屏幕坐标）
+            
+            # 将 mouse_data 转换为有符号16位整数
+            wheel_delta = int(mouse_data)
+
+            # wParam: 高16位是滚轮增量（有符号），低16位是按键状态（0表示没有按键）
+            wparam = ((wheel_delta & 0xFFFF) << 16) | 0x0000
+
+            # lParam: 低16位是 x 坐标（屏幕坐标），高16位是 y 坐标（屏幕坐标）
+            lparam = ((int(screen_y) & 0xFFFF) << 16) | (int(screen_x) & 0xFFFF)
+
+            # 使用 SendMessage 而不是 PostMessage，确保消息被处理
+            # SendMessage 是同步的，会等待消息处理完成
+            win32gui.SendMessage(target_hwnd, win32con.WM_MOUSEWHEEL, wparam, lparam)
+            # print(f"SendMessage 发送滚轮消息: {wparam}|{lparam}|{wheel_delta}")
+            # 等待滚动动画完成
+            # sleep(0.1)
+
+            # 等待滚动动画完成（截图对比检测画面稳定）
+            self._wait_scroll_stable()
+            
+        #不提供目标窗口句柄，使用SendInput发送滚轮消息
         else:
-            pyautogui.scroll(scroll_amount, x=screen_x, y=screen_y)
+            # 创建鼠标滚轮输入
+            mouse_input = MOUSEINPUT(
+                dx=0,
+                dy=0,
+                mouseData=mouse_data,
+                dwFlags=MOUSEEVENTF_WHEEL,
+                time=0,
+                dwExtraInfo=0,
+            )
+    
+            input_struct = INPUT(
+                type=INPUT_MOUSE,
+                mi=mouse_input,
+            )
+    
+            # 发送输入并检查返回值
+            result = SendInput(1, ctypes.byref(input_struct), ctypes.sizeof(INPUT))
+            # print(f"SendInput 返回值: {result}|{mouse_data}|{input_struct}")
+            if result == 0:
+                error_code = ctypes.windll.kernel32.GetLastError()
+                print(f"SendInput 返回值: {result} (1=成功, 0=失败), error_code: {error_code}")
+            # 等待滚动动画完成
+            # sleep(0.1)
 
-        # 等待滚动动画完成（减少等待时间以提高响应速度）
-        sleep(0.01)
+            # 等待滚动动画完成（截图对比检测画面稳定）
+            self._wait_scroll_stable()
 
+        # 恢复覆盖层的 topmost 和 alpha 属性
+        # if target_hwnd and original_topmost is not None:
+        #     try:
+        #         self.root.attributes('-topmost', original_topmost)
+        #         self.root.attributes('-alpha', original_alpha)
+        #         self.root.lift()  # 恢复窗口层级
+        #     except Exception:
+        #         pass
+
+
+    
     def _regions_similar(self, r1, r2, same_ratio_value, pixel_diff_threshold, dynamic_region_ratio=None):
         """
         模糊判断两个灰度区域是否“足够相似”
@@ -1298,7 +1488,7 @@ class CaptureOverlay:
         # -----------------------------
 
         # 简单近似版：使用按行/按列投影 + 阈值切分快速粗分多个区块
-        def _find_regions_by_projection(mask, min_area=225, max_components=3, gap_threshold=50):
+        def _find_regions_by_projection(mask, min_area=100, max_components=3, gap_threshold=50):
             """
             使用投影方法快速切分区块，比完整连通域算法更快
             - gap_threshold: 距离大于此值（像素）算不同区块，默认50
@@ -1394,7 +1584,7 @@ class CaptureOverlay:
             return candidate_regions[:max_components]
 
         # 使用简单近似版：投影切分，只取3个动态区间，距离大于50像素算不同区块
-        components = _find_regions_by_projection(diff_mask, min_area=225, max_components=3, gap_threshold=50)
+        components = _find_regions_by_projection(diff_mask, min_area=100, max_components=3, gap_threshold=50)
         if not components:
             return base_same_ratio
 
@@ -1465,10 +1655,21 @@ class CaptureOverlay:
             top_region = img2.crop((0, 0, w2, overlap))
             if ImageChops.difference(bottom_region, top_region).getbbox() is None:
                 top_same += 1
+            else:
+                break
+        #纯色重叠容易误判，跳过
+        if top_same == 0:
+            return 0
+        else:
+            gray = img1.crop((0, 0, w1, top_same)).convert("L")
+            mn, mx = gray.getextrema()
+            if mx - mn <= 20:
+                # print(f"top_same跳过纯色: {top_same}|{mn}|{mx}")
+                return 0
+            # print(f"顶部相同区域: {top_same}|{mn}|{mx}")
+            return top_same
 
-        return top_same
-
-    def _find_overlap_rows(self, img1, img2):
+    def _find_overlap_rows(self, img1, img2, max_search):
         """
         检测img1底部和img2顶部完全相同的行数
         
@@ -1491,7 +1692,8 @@ class CaptureOverlay:
         img2 = img2.convert('L') if img2.mode != 'L' else img2
 
         # 设置最大搜索范围
-        max_search = min(h1, h2)
+        max_search = min(h1, h2, max_search)
+        pure_color = 0
         overlap = 0
         # 从img2底部开始，逐行向上检查
         for overlap in range(1, max_search + 1):
@@ -1499,20 +1701,24 @@ class CaptureOverlay:
             bottom_region = img1.crop((0, h1 - overlap, w1, h1))
             # 从img2顶部取overlap行
             top_region = img2.crop((0, 0, w2, overlap))
+            
+
             #比较两个区域是否完全相同
             if ImageChops.difference(bottom_region, top_region).getbbox() is None:
-                if overlap < 50:
-                    gray = bottom_region.convert("L")
-                    mn, mx = gray.getextrema()
-                    # 纯色重叠容易误判，跳过
-                    if mn == mx:
-                        # print("跳过纯色: ",overlap)
-                        continue
-                    # print("跳过纯色行: ",overlap)
-                    return overlap
-                else:
-                    # print(f"检测到重叠: {overlap}行{max_search}")
-                    return overlap
+                #先排除新图顶部纯色区域
+                gray = top_region.convert("L")
+                mn, mx = gray.getextrema()
+                if mx - mn <= 20:
+                    pure_color += 1
+                    continue
+                # print(f"精确检测到重叠: {overlap}行{max_search}|{pure_color}|{mn}||{mx}")
+                return overlap
+
+        if pure_color >= 1:
+            # print(f"纯色重叠: {pure_color}行{max_search}")
+            return pure_color
+                
+
 
         # 2. 精确没通过时，用模糊判断做补充
         overlap = 0
@@ -1527,15 +1733,8 @@ class CaptureOverlay:
                 same_ratio_value = 0.99
                 same_ratio = self._regions_similar(bottom_region, top_region, same_ratio_value, pixel_diff_threshold=20)
                 if same_ratio >= same_ratio_value:
-                    if overlap < 50:
-                        gray = bottom_region.convert("L")
-                        mn, mx = gray.getextrema()
-                        if mn == mx:
-                            continue
-                        return overlap
-                    else:
-                        return overlap
-
+                    # print(f"模糊检测到重叠: {overlap}行{max_search}")        
+                    return overlap
 
         print(f"未检测到重叠，已检查 {overlap} 行{h1}|{h2}") 
         return 0
@@ -1620,28 +1819,28 @@ class CaptureOverlay:
             # pyautogui.moveTo(screen_x, screen_y)
 
             # 计算反比例因子：框选区域越高，因子越小
-            reciprocal_ratio = 1 - (y2-y1) / self.root.winfo_screenheight()
+            # reciprocal_ratio = 1 - (y2-y1) / self.root.winfo_screenheight()
             # print(f"反比例: {reciprocal_ratio}|{self.root.winfo_screenheight()}|{(y2-y1)}")
             #后续更加根据重叠行数动态调整滚动单位像素数
-            rect_height_ratio = int(reciprocal_ratio * (y2-y1)*0.7 + (y2-y1)*0.3)
-            rect_height = min(rect_height_ratio,int((y2-y1)*0.5))
+            # rect_height_ratio = int(reciprocal_ratio * (y2-y1)*0.1 + (y2-y1)*0.9)
+            # rect_height = min(rect_height_ratio,int((y2-y1)*0.9))
 
+            rect_height = y2-y1
 
-            print(f"计算出的滚动单位像素数: {rect_height}|{(y2-y1)}")
-            self.scroll_unit_pixels = rect_height
+            self.scroll_unit_pixels = int(rect_height*0.9)
             # 截取第一张图片
             first_image_full = self._capture_region()
             if not first_image_full:
                 self.root.after(0, self._cancel)
                 return
             
-            # 第一张图片截取顶部部分
-            first_width, first_height = first_image_full.size
-            crop_height = first_height#min(self.scroll_unit_pixels, first_height)
+            # # 第一张图片截取顶部部分
+            # first_width, first_height = first_image_full.size
+            # crop_height = first_height
 
         
-            first_image = first_image_full.crop((0, 0, first_width, crop_height))
-            
+            # first_image = first_image_full.crop((0, 0, first_width, crop_height))
+            first_image = first_image_full
             self.stitched_image = first_image
             scroll_count = 0
             max_scrolls = 1000  # 防止无限循环
@@ -1651,6 +1850,10 @@ class CaptureOverlay:
             # 更新预览
             self.root.after(0, lambda: self._show_preview(self.stitched_image))
             # self._show_preview(self.stitched_image)
+
+            # 内存获取鼠标滚轮滚动行数，失败默认返回3
+            current_lines = self.get_mouse_scroll_lines_api()
+
             overlap_rows = 0
             if_unit_pixels = False
             rollback_unit_pixels = 0
@@ -1661,8 +1864,7 @@ class CaptureOverlay:
                     break
                 
                 #rollback_unit_pixels不等于0时进行回滚操作
-                self._simulate_scroll(rollback_unit_pixels, center_x, center_y, scroll_amount=-self.scroll_unit_pixels)
-                # print(f"正常滚动: {self.scroll_unit_pixels}")
+                self._simulate_scroll(current_lines, rollback_unit_pixels, center_x, center_y, pixels_amount=-self.scroll_unit_pixels, target_hwnd=window_hwnd)
                 
                 # 截取滚动后的图片
                 new_image = self._capture_region()
@@ -1702,36 +1904,40 @@ class CaptureOverlay:
                             top_same = self._find_top_same(current_image, new_image)
                             if top_same != 0:
                                 new_image1 = new_image.crop((0, top_same+15, new_image.width, new_image.height))
+                                self.scroll_unit_pixels = self.scroll_unit_pixels - top_same
                             else:
                                 new_image1 = new_image
+                            
+                            max_search = self.scroll_unit_pixels
                             #确定安全滚动量
                             if if_unit_pixels == False:
-                                overlap_rows = self._find_overlap_rows(current_image, new_image1)
+                                overlap_rows = self._find_overlap_rows(current_image, new_image1, max_search)
                                 if self.scroll_unit_pixels is None:
                                     self.scroll_unit_pixels = int(overlap_rows*0.3)
                                 
                                 if overlap_rows >= 50:
-                                    self.scroll_unit_pixels = int(self.scroll_unit_pixels + int(min(reciprocal_ratio*overlap_rows*0.7+overlap_rows*0.3,overlap_rows*0.5)))
+                                    self.scroll_unit_pixels = int(self.scroll_unit_pixels + overlap_rows*0.9)
                                     rollback_unit_pixels = 0
                                 elif 0 < overlap_rows < 50:
                                     if_unit_pixels  = True
                                     rollback_unit_pixels = 0
-                                if overlap_rows == 0 and no_change_count <= 3:
+
+                                if overlap_rows == 0 and no_change_count <= 5:
                                     if_unit_pixels = False
                                     rollback_unit_pixels = int(self.scroll_unit_pixels/3)
                                     self.scroll_unit_pixels = self.scroll_unit_pixels - rollback_unit_pixels
-                                    print(f"回滚：{rollback_unit_pixels}")
+                                    # print(f"回滚：{rollback_unit_pixels}")
 
                                 # print(f"确定安全滚动量: {self.scroll_unit_pixels}|{overlap_rows}|{(y2-y1)}|{if_unit_pixels}|{top_same}")
                             # 检测重叠行数
                             else:
-                                overlap_rows = self._find_overlap_rows(current_image, new_image1)
-                            # 裁剪掉重叠部分
+                                overlap_rows = self._find_overlap_rows(current_image, new_image1, max_search)
+                            
                             if overlap_rows == 0:
                                 no_change_count += 1
                             else:
                                 no_change_count = 0
-                            
+                                # 裁剪掉重叠部分                                
                                 new_image1 = new_image1.crop((0, overlap_rows, new_image1.width, new_image1.height))
                                 # 拼接图片
                                 self.stitched_image = self._stitch_images(self.stitched_image, new_image1, new_image1.height)
@@ -1749,7 +1955,7 @@ class CaptureOverlay:
                     scroll_count += 1
                     continue
 
-                if no_change_count >= 4:
+                if no_change_count >= 6:
                     print(f"连续多次无重叠: {no_change_count}")
                     break
 

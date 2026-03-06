@@ -157,3 +157,36 @@ def format_color(color_str: str) -> tuple:
         int(color_str[2:4], 16),
         int(color_str[4:6], 16)
     )
+
+
+def copy_text_to_clipboard(text: str):
+    """
+    复制文本到剪切板
+    :param text: 要复制的文本字符串
+    
+    优先使用 Windows 原生剪贴板（pywin32），
+    失败时再回退到 tkinter 方案。
+    """
+    # --- 首选：pywin32，直接写入 CF_UNICODETEXT ---
+    try:
+        import win32clipboard
+        import win32con
+        
+        win32clipboard.OpenClipboard()
+        win32clipboard.EmptyClipboard()
+        win32clipboard.SetClipboardData(win32con.CF_UNICODETEXT, text)
+        win32clipboard.CloseClipboard()
+        return
+    except Exception as e:
+        print(f"使用 pywin32 复制文本到剪切板失败，将尝试 tkinter 方案：{e}")
+    
+    # --- 回退方案：使用 tkinter ---
+    try:
+        root = tk.Tk()
+        root.withdraw()
+        root.clipboard_clear()
+        root.clipboard_append(text)
+        root.update()
+        root.destroy()
+    except Exception as e:
+        print(f"复制文本到剪切板失败：{e}")
