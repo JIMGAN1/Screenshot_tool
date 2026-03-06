@@ -1827,7 +1827,7 @@ class CaptureOverlay:
 
             rect_height = y2-y1
 
-            self.scroll_unit_pixels = int(rect_height*0.9)
+            self.scroll_unit_pixels = int(rect_height*0.7)
             # 截取第一张图片
             first_image_full = self._capture_region()
             if not first_image_full:
@@ -1913,10 +1913,10 @@ class CaptureOverlay:
                             if if_unit_pixels == False:
                                 overlap_rows = self._find_overlap_rows(current_image, new_image1, max_search)
                                 if self.scroll_unit_pixels is None:
-                                    self.scroll_unit_pixels = int(overlap_rows*0.3)
+                                    self.scroll_unit_pixels = int(overlap_rows*0.7)
                                 
                                 if overlap_rows >= 50:
-                                    self.scroll_unit_pixels = int(self.scroll_unit_pixels + overlap_rows*0.9)
+                                    self.scroll_unit_pixels = int(self.scroll_unit_pixels + overlap_rows*0.7)
                                     rollback_unit_pixels = 0
                                 elif 0 < overlap_rows < 50:
                                     if_unit_pixels  = True
