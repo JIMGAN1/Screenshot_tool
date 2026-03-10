@@ -1735,23 +1735,24 @@ class CaptureOverlay:
                 
 
 
-        # # 2. 精确没通过时，用模糊判断做补充
-        # overlap = 0
-        # for overlap in range(1, max_search + 1):
-        #     # 从img1底部取overlap行
-        #     bottom_region = img1.crop((0, h1 - overlap, w1, h1))
-        #     # 从img2顶部取overlap行
-        #     top_region = img2.crop((0, 0, w2, overlap))
+        # 2. 精确没通过时，用模糊判断做补充
+        overlap = 0
+        for overlap in range(1, max_search + 1):
+            # 从img1底部取overlap行
+            bottom_region = img1.crop((0, h1 - overlap, w1, h1))
+            # 从img2顶部取overlap行
+            top_region = img2.crop((0, 0, w2, overlap))
 
-        #     if overlap >= 20:
-        #         # pixel_diff_threshold：判断单个像素是否相似的"容忍度" same_ratio：整个图像中满足条件的像素所占的比例
-        #         same_ratio_value = 0.99
-        #         same_ratio = self._regions_similar(bottom_region, top_region, same_ratio_value, pixel_diff_threshold=20)
-        #         if same_ratio >= same_ratio_value:
-        #             # print(f"模糊检测到重叠: {overlap}行{max_search}")        
-        #             return overlap
+            if overlap >= 20:
+                # pixel_diff_threshold：判断单个像素是否相似的"容忍度" same_ratio：整个图像中满足条件的像素所占的比例
+                same_ratio_value = 0.99
+                same_ratio = self._regions_similar(bottom_region, top_region, same_ratio_value, pixel_diff_threshold=20)
+                if same_ratio >= same_ratio_value:
+                    # print(f"模糊检测到重叠: {overlap}行{max_search}")        
+                    return overlap
 
         print(f"未检测到重叠，已检查 {overlap} 行{h1}|{h2}") 
+
         return 0
 
     def _stitch_images(self, base_image, new_image, scroll_unit_pixels):
