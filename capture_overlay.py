@@ -4,7 +4,7 @@
 from time import perf_counter, sleep
 import tkinter as tk
 from PIL import Image, ImageGrab, ImageTk, ImageChops
-from numpy import asarray, int16
+from numpy import array, asarray, int16, any
 import mss
 from utils import copy_text_to_clipboard
 import win32gui
@@ -1328,7 +1328,7 @@ class CaptureOverlay:
         # 添加调试输出 
     
         # 移动鼠标到指定位置
-        ctypes.windll.user32.SetCursorPos(int(screen_x), int(screen_y))
+        # ctypes.windll.user32.SetCursorPos(int(screen_x), int(screen_y))
 
         # 确定滚动单位像素数
         pixels_amount = rollback_unit_pixels if rollback_unit_pixels != 0 else pixels_amount
@@ -1653,9 +1653,20 @@ class CaptureOverlay:
             bottom_region = img1.crop((0, 0, w1, overlap))
             # 从img2顶部取overlap行
             top_region = img2.crop((0, 0, w2, overlap))
-            if ImageChops.difference(bottom_region, top_region).getbbox() is None:
-                top_same += 1
-            else:
+            
+            # 比较两个区域是否完全相同
+            try:
+                diff = ImageChops.difference(bottom_region, top_region)
+                diff_array = array(diff)
+                # if ImageChops.difference(bottom_region, bottom_region).getbbox() is None:
+                # 检查是否有超过容差的像素
+                if (diff_array <= 5).mean() >= 0.999: #容差小于5的像素占比大于99%
+                    top_same = overlap
+                else:
+                    break
+            except Exception as e:
+                print(f"比较异常: {e}")
+
                 break
         #纯色重叠容易误判，跳过
         if top_same == 0:
@@ -1704,7 +1715,11 @@ class CaptureOverlay:
             
 
             #比较两个区域是否完全相同
-            if ImageChops.difference(bottom_region, top_region).getbbox() is None:
+            diff = ImageChops.difference(bottom_region, top_region)
+            diff_array = array(diff)
+            # if ImageChops.difference(bottom_region, bottom_region).getbbox() is None:
+            # 检查是否有超过容差的像素
+            if (diff_array <= 5).mean() >= 0.999: #容差小于5的像素占比大于99.9%
                 #先排除新图顶部纯色区域
                 gray = top_region.convert("L")
                 mn, mx = gray.getextrema()
@@ -1720,21 +1735,21 @@ class CaptureOverlay:
                 
 
 
-        # 2. 精确没通过时，用模糊判断做补充
-        overlap = 0
-        for overlap in range(1, max_search + 1):
-            # 从img1底部取overlap行
-            bottom_region = img1.crop((0, h1 - overlap, w1, h1))
-            # 从img2顶部取overlap行
-            top_region = img2.crop((0, 0, w2, overlap))
+        # # 2. 精确没通过时，用模糊判断做补充
+        # overlap = 0
+        # for overlap in range(1, max_search + 1):
+        #     # 从img1底部取overlap行
+        #     bottom_region = img1.crop((0, h1 - overlap, w1, h1))
+        #     # 从img2顶部取overlap行
+        #     top_region = img2.crop((0, 0, w2, overlap))
 
-            if overlap >= 20:
-                # pixel_diff_threshold：判断单个像素是否相似的"容忍度" same_ratio：整个图像中满足条件的像素所占的比例
-                same_ratio_value = 0.99
-                same_ratio = self._regions_similar(bottom_region, top_region, same_ratio_value, pixel_diff_threshold=20)
-                if same_ratio >= same_ratio_value:
-                    # print(f"模糊检测到重叠: {overlap}行{max_search}")        
-                    return overlap
+        #     if overlap >= 20:
+        #         # pixel_diff_threshold：判断单个像素是否相似的"容忍度" same_ratio：整个图像中满足条件的像素所占的比例
+        #         same_ratio_value = 0.99
+        #         same_ratio = self._regions_similar(bottom_region, top_region, same_ratio_value, pixel_diff_threshold=20)
+        #         if same_ratio >= same_ratio_value:
+        #             # print(f"模糊检测到重叠: {overlap}行{max_search}")        
+        #             return overlap
 
         print(f"未检测到重叠，已检查 {overlap} 行{h1}|{h2}") 
         return 0
@@ -1827,7 +1842,7 @@ class CaptureOverlay:
 
             rect_height = y2-y1
 
-            self.scroll_unit_pixels = int(rect_height*0.7)
+            self.scroll_unit_pixels = int(rect_height*0.5)
             # 截取第一张图片
             first_image_full = self._capture_region()
             if not first_image_full:
@@ -1902,9 +1917,8 @@ class CaptureOverlay:
                         try:
                             # 截取顶部相同区域
                             top_same = self._find_top_same(current_image, new_image)
-                            if top_same != 0:
+                            if top_same != 0 and top_same < new_image.height-15:
                                 new_image1 = new_image.crop((0, top_same+15, new_image.width, new_image.height))
-                                self.scroll_unit_pixels = self.scroll_unit_pixels - top_same
                             else:
                                 new_image1 = new_image
                             

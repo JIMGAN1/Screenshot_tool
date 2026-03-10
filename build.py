@@ -215,8 +215,8 @@ exe = EXE(
         print("\n打包完成！")
         if os.path.exists(exe_path):
             size_mb = os.path.getsize(exe_path) / (1024 * 1024)
-            print(f"EXE 文件位置：{exe_path}")
-            print(f"EXE 文件大小：{size_mb:.2f} MB")
+        print(f"EXE 文件位置：{exe_path}")
+        print(f"EXE 文件大小：{size_mb:.2f} MB")
         print(f"GitHub: {GITHUB_URL}")
     except subprocess.CalledProcessError as e:
         print(f"\n打包失败：{e}")
