@@ -44,7 +44,6 @@ screenshot_tool/
 ├── utils.py                # 工具函数（保存、剪贴板操作等）
 ├── build.py                # PyInstaller 打包脚本
 ├── requirements.txt        # 依赖列表
-├── 截图工具计划书.md       # 项目计划文档
 ├── JT.ico                  # 程序图标
 ├── JT.png                  # 图标预览
 └── dist/                   # 打包输出目录
