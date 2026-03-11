@@ -4,3 +4,4 @@ pywin32>=306; platform_system=="Windows"
 pyinstaller>=6.0.0
 pystray>=0.19.4
 numpy>=1.21,<2.0
+keyboard>=0.13.5

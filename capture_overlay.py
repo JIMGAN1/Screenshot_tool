@@ -183,6 +183,18 @@ class CaptureOverlay:
         # 创建放大器
         self._create_magnifier()
 
+        # 放大镜创建后立即设置到当前鼠标位置（避免初始显示在左上角）
+        try:
+            # 获取当前鼠标的屏幕绝对坐标
+            mouse_x = self.root.winfo_pointerx()
+            mouse_y = self.root.winfo_pointery()
+            # 转换为覆盖层坐标
+            init_x = mouse_x - self.root.winfo_rootx()
+            init_y = mouse_y - self.root.winfo_rooty()
+            self._update_magnifier(init_x, init_y)
+        except Exception:
+            pass  # 忽略获取鼠标位置的错误
+
     def _create_magnifier(self):
         """创建放大器窗口"""
         # 放大镜单独作为顶层窗口挂在主窗口之上
