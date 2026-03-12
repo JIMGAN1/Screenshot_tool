@@ -238,16 +238,16 @@ class CaptureOverlay:
             9,
             anchor=tk.W,
             text="0|0",
-            fill="#ffffff",
-            font=("Microsoft YaHei UI", 9, "bold")
+            fill="#00ffff",
+            font=("Microsoft YaHei UI", 8)
         )
         self.color_text_id = self.magnifier_canvas.create_text(
             4,
             25,
             anchor=tk.W,
             text="#000000",
-            fill="#ffffff",
-            font=("Microsoft YaHei UI", 9, "bold")
+            fill="#00ffff",
+            font=("Microsoft YaHei UI", 8)
         )
 
     def _update_magnifier(self, x, y):
