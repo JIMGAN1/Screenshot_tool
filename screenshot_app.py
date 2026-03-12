@@ -132,6 +132,9 @@ class ScreenshotApp:
             pass
         self.root.attributes('-topmost', True)  # 始终置顶
 
+        # 获取系统 DPI 缩放比例
+        self._scale_factor = self._get_scale_factor()
+
         # # 设置左上角图标，与托盘图标保持一致风格
         # try:
         #     icon_path = _resource_path("JT.ico")
@@ -139,6 +142,16 @@ class ScreenshotApp:
         #         self.root.iconbitmap(icon_path)
         # except Exception:
         #     pass
+
+    def _get_scale_factor(self):
+        """获取系统 DPI 缩放比例"""
+        try:
+            user32 = ctypes.windll.user32
+            user32.SetProcessDPIAware()
+            dpi = user32.GetDpiForSystem()
+            return dpi / 96.0
+        except Exception:
+            return 1.0
 
     def _adjust_window_geometry(self):
         """根据控件实际大小和屏幕分辨率，自动调整窗口大小和位置
@@ -148,21 +161,31 @@ class ScreenshotApp:
         # 先让 Tk 计算所有控件所需的最小大小
         self.root.update_idletasks()
 
-        req_width = self.root.winfo_reqwidth()
+        # 当前按钮宽度，确保“截图”与“自动保存”宽度一致
+        capture_width = self.capture_btn.winfo_reqwidth() if hasattr(self, "capture_btn") else 0
+        auto_width = self.auto_save_cb.winfo_reqwidth() if hasattr(self, "auto_save_cb") else 0
+        button_width = max(capture_width, auto_width)
+
+        req_width = max(self.root.winfo_reqwidth(), button_width)
         req_height = self.root.winfo_reqheight()
 
         screen_width = self.root.winfo_screenwidth()
         screen_height = self.root.winfo_screenheight()
 
-        # 宽度：以控件需要的宽度为主，略微增加一点边距即可，让整体更紧凑
-        win_width = max(req_width + 10, 110)
-        win_width = min(win_width, 190)
+        # 基础内边距：左右各5 * scale_factor
+        padding = int(10 * self._scale_factor)
+        # 最小宽度
+        base_min_width = 180
+
+        # 宽度：取实际需要宽度和最小宽度的较大值
+        win_width = max(req_width + padding, int(base_min_width * self._scale_factor))
 
         # 高度直接用控件实际需要的高度，保证文字不被裁剪
         win_height = req_height
 
-        # 位置：右上角，预留出一点距离
-        win_x = screen_width - win_width * 2
+        # 位置：右上角，预留出一点距离（根据缩放调整）
+        offset = int(30 * self._scale_factor)
+        win_x = screen_width//10 * 9 - win_width - offset
         win_y = screen_height // 10
 
         self.root.geometry(f"{win_width}x{win_height}+{win_x}+{win_y}")
@@ -176,19 +199,22 @@ class ScreenshotApp:
 
         # 主框架
         main_frame = tk.Frame(self.root, bg=bg_color)
-        main_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=int(5 * self._scale_factor), pady=int(5 * self._scale_factor))
 
         # 按钮统一颜色
         btn_bg = '#3498db'  # 按钮初始颜色
         btn_fg = 'white'      # 字体颜色
         btn_checked_bg = '#0059e8'  # 勾选后深蓝色
 
+        # 根据缩放比例计算字体大小 # 字体系统自动缩放了，不需要再缩放
+        capture_btn_font_size = max(11, int(13)) 
+        auto_save_font_size = max(9, int(11))
 
         # 截图按钮(高度扩大1.5倍)
         self.capture_btn = tk.Button(
             main_frame,
             text="截图",
-            font=('Microsoft YaHei UI', 13, 'bold'),
+            font=('Microsoft YaHei UI', capture_btn_font_size, 'bold'),
             bg=btn_bg,
             fg=btn_fg,
             activebackground="#0099f9", # 激活背景颜色
@@ -199,7 +225,7 @@ class ScreenshotApp:
             # relief=tk.FLAT, 
             relief=tk.RAISED # 按钮样式
         )
-        self.capture_btn.pack(fill=tk.X, pady=(0, 3))
+        self.capture_btn.pack(fill=tk.X, pady=(0, int(3 * self._scale_factor)))
 
         # 启动后更新按钮文字（添加快捷键）
         self.root.after(500, self._update_capture_btn_text)
@@ -212,7 +238,7 @@ class ScreenshotApp:
             cb_frame,
             text="自动保存",
             variable=self.auto_save,
-            font=('Microsoft YaHei UI', 11, 'bold'),
+            font=('Microsoft YaHei UI', auto_save_font_size, 'bold'),
             bg=btn_bg,
             fg=btn_fg,
             selectcolor=btn_checked_bg,
@@ -222,9 +248,8 @@ class ScreenshotApp:
             relief=tk.FLAT,
             command=self._on_auto_save_changed,# 绑定事件
             indicatoron=False,# 不显示默认的勾
-            width=100,
         )
-        self.auto_save_cb.pack()
+        self.auto_save_cb.pack(fill=tk.X)
 
     def _on_auto_save_changed(self):
         """自动保存状态改变"""
@@ -238,6 +263,8 @@ class ScreenshotApp:
         global CURRENT_HOTKEY
         if CURRENT_HOTKEY:
             self.capture_btn.config(text=f"截图{CURRENT_HOTKEY}")
+        # 更新按钮文字后重新调整窗口宽度
+        self.root.after(0, self._adjust_window_geometry)
 
     def _on_capture_click(self):
         """点击截图按钮"""
@@ -411,6 +438,9 @@ def main():
     # 创建应用（窗口位置会在初始化时设置好）
     app = ScreenshotApp(root)
 
+    # 复用 ScreenshotApp 的缩放比例
+    _message_scale_factor = app._scale_factor
+
     # 关闭按钮只隐藏窗口，不退出程序（保留托盘图标继续工作）
     def on_close():
         root.withdraw()
@@ -437,6 +467,7 @@ def main():
         ]
 
     # ==================== 自定义消息框（无图标）====================
+
     def _show_message(title, message, msg_type="info", parent=None):
         """
         显示无图标的自定义消息框
@@ -444,20 +475,36 @@ def main():
         """
         dialog = tk.Toplevel()
         dialog.title(title)
-        dialog.geometry("300x120")
         dialog.resizable(False, False)
         dialog.configure(bg="#3ee0f5")
+
+        # 根据缩放比例计算窗口尺寸
+        base_width, base_height = 300, 120
+        width = int(base_width * _message_scale_factor)
+        height = int(base_height * _message_scale_factor)
+
+        # 根据缩放比例计算字体大小
+        base_font_size = 11
+        font_size = max(10, int(base_font_size))
+
+        # 根据缩放比例计算内边距
+        base_wraplength = 256
+        wraplength = int(base_wraplength * _message_scale_factor)
+
+        dialog.geometry(f"{width}x{height}")
 
         # 先隐藏窗口，避免显示时产生残影
         dialog.withdraw()
 
-        # 居中（屏幕中间向下偏移150像素）
+        # 居中显示
         dialog.update_idletasks()
         sw = dialog.winfo_screenwidth()
         sh = dialog.winfo_screenheight()
-        x = (sw - 270) // 2
-        y = (sh - 120) // 2
-        dialog.geometry(f"270x120+{x}+{y}")
+        display_width = int(270 * _message_scale_factor)
+        display_height = int(120 * _message_scale_factor)
+        x = (sw - display_width) // 2
+        y = (sh - display_height) // 2
+        dialog.geometry(f"{display_width}x{display_height}+{x}+{y}")
 
         # 设置为工具窗口（不在任务栏显示）
         try:
@@ -471,17 +518,17 @@ def main():
             text=message,
             bg="#3ee0f5",
             fg="#053D97",
-            font=("Microsoft YaHei UI", 13, "bold"),
-            wraplength=256,
+            font=("Microsoft YaHei UI", font_size, "bold"),
+            wraplength=wraplength,
             justify="center"
         )
-        msg_label.pack(expand=True, fill=tk.BOTH, pady=(7, 7))
+        msg_label.pack(expand=True, fill=tk.BOTH, pady=(int(7 * _message_scale_factor), int(7 * _message_scale_factor)))
 
         # 确定按钮
         ok_btn = tk.Button(
             dialog,
             text="确 定",
-            font=("Microsoft YaHei UI", 13, "bold"),
+            font=("Microsoft YaHei UI", font_size + 2, "bold"),
             bg="#3498db",
             fg="white",
             activebackground="#0099f9",
@@ -490,7 +537,7 @@ def main():
             borderwidth=0,
             command=dialog.destroy
         )
-        ok_btn.pack(pady=(0, 13))
+        ok_btn.pack(pady=(0, int(13 * _message_scale_factor)))
 
         # 居中父窗口
         if parent:
@@ -955,21 +1002,28 @@ def main():
 
         dialog.protocol("WM_DELETE_WINDOW", on_dialog_close)
 
-        # 先隐藏窗口，设置好位置后再显示
-        width, height = 255, 145
-        dialog.geometry(f"{width}x{height}")
+        # 使用 app 中已获取的缩放比例
+        scale_factor = app._scale_factor
+        # 基准尺寸（100% 缩放时）- 宽度固定，最小高度
+        base_width = 255
+        base_min_height = 145
+        # 根据缩放比例计算实际尺寸
+        width = int(base_width * scale_factor)
+
+        # 计算缩放后的字体大小（保持比例）
+        base_title_font = 14
+        base_value_font = 13
+        base_tip_font = 9
+        base_btn_font = 13
+        title_font_size = max(10, int(base_title_font))
+        value_font_size = max(10, int(base_value_font))
+        tip_font_size = max(8, int(base_tip_font))
+        btn_font_size = max(9, int(base_btn_font))
+
+        # 先设置一个临时高度，让控件能够正常布局
+        temp_height = int(base_min_height * scale_factor)
+        dialog.geometry(f"{width}x{temp_height}")
         dialog.withdraw()
-        dialog.update_idletasks()
-        
-        # 获取屏幕尺寸并计算居中位置
-        sw = dialog.winfo_screenwidth()
-        sh = dialog.winfo_screenheight()
-        x = (sw - width) // 2
-        y = (sh - height) // 2
-        dialog.geometry(f"{width}x{height}+{x}+{y}")
-        
-        # 设置好位置后再显示
-        dialog.deiconify()
 
         # 捕获键盘：通过按下/抬起事件维护当前修饰键状态，避免 Ctrl/Alt 等“粘住”现象
         pressed_mods: set[str] = set()   # 当前按着的修饰键（Ctrl/Alt/Shift/Win）
@@ -988,7 +1042,7 @@ def main():
             text="请按下新的快捷键组合",
             bg=bg_color,
             fg="#000520",
-            font=("Microsoft YaHei UI", 14, "bold"),
+            font=("Microsoft YaHei UI", title_font_size, "bold"),
         )
         title_label.pack(pady=(0, 2))
 
@@ -997,7 +1051,7 @@ def main():
             text="当前：",
             bg=bg_color,
             fg="#053D97",
-            font=("Microsoft YaHei UI", 13, "bold"),
+            font=("Microsoft YaHei UI", value_font_size, "bold"),
         )
         value_label.pack(pady=(0, 2))
 
@@ -1006,21 +1060,21 @@ def main():
             text="点击“确定”保存。Esc 取消",
             bg=bg_color,
             fg="black",
-            font=("Microsoft YaHei UI", 9),
+            font=("Microsoft YaHei UI", tip_font_size),
             justify="left",
         )
         tip_label.pack()
 
         # 显示当前已保存的快捷键
         current = _load_hotkey()
-        value_label.config(text=f"当前：{current}")
+        value_label.config(text=f"当前:{current}")
 
         def _update_label():
             if selected_key[0]:
                 disp = _format_hotkey_string(selected_mods, selected_key[0])
-                value_label.config(text=f"新按键：{disp}")
+                value_label.config(text=f"新按键:{disp}")
             else:
-                value_label.config(text=f"当前：{current}")
+                value_label.config(text=f"当前:{current}")
 
         def on_key_press(event):
             kn = event.keysym
@@ -1197,12 +1251,12 @@ def main():
                 print("[全局钩子] 安装失败，将只使用 Tkinter 键盘事件")
 
         btn_frame = tk.Frame(frame, bg=bg_color)
-        btn_frame.pack(pady=(5, 0))
+        btn_frame.pack(pady=(5, 6))
 
         btn_ok = tk.Button(
             btn_frame,
             text="确 定",
-            font=("Microsoft YaHei UI", 13, "bold"),
+            font=("Microsoft YaHei UI", btn_font_size, "bold"),
             bg="#3498db",
             fg="white",
             activebackground="#0099f9",
@@ -1217,7 +1271,7 @@ def main():
         btn_cancel = tk.Button(
             btn_frame,
             text="取 消",
-            font=("Microsoft YaHei UI", 13, "bold"),
+            font=("Microsoft YaHei UI", btn_font_size, "bold"),
             bg="#3498db",
             fg="white",
             activebackground="#0099f9",
@@ -1228,6 +1282,25 @@ def main():
             command=on_cancel,
         )
         btn_cancel.pack(side=tk.LEFT, padx=5)
+
+        # ==================== 根据控件实际大小自动调整窗口高度 ====================
+        dialog.update_idletasks()
+
+        # 获取控件实际需要的最小高度
+        req_height = dialog.winfo_reqheight()
+
+        # 实际高度取最小需要高度（但不超过临时高度）
+        actual_height = min(req_height, temp_height)
+
+        # 获取屏幕尺寸并计算居中位置
+        sw = dialog.winfo_screenwidth()
+        sh = dialog.winfo_screenheight()
+        x = (sw - width) // 2
+        y = (sh - actual_height) // 2
+        dialog.geometry(f"{width}x{actual_height}+{x}+{y}")
+
+        # 设置好位置后再显示
+        dialog.deiconify()
 
         # 仅打开时置前并获取一次焦点，不抢其他窗口焦点（不用 grab_set）
         dialog.lift()
