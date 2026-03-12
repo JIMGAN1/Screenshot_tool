@@ -476,7 +476,7 @@ def main():
         dialog = tk.Toplevel()
         dialog.title(title)
         dialog.resizable(False, False)
-        dialog.configure(bg="#3ee0f5")
+        dialog.configure(bg="#72eaff")
 
         # 根据缩放比例计算窗口尺寸
         base_width, base_height = 300, 120
@@ -484,7 +484,7 @@ def main():
         height = int(base_height * _message_scale_factor)
 
         # 根据缩放比例计算字体大小
-        base_font_size = 11
+        base_font_size = 13
         font_size = max(10, int(base_font_size))
 
         # 根据缩放比例计算内边距
@@ -516,7 +516,7 @@ def main():
         msg_label = tk.Label(
             dialog,
             text=message,
-            bg="#3ee0f5",
+            bg="#72eaff",
             fg="#053D97",
             font=("Microsoft YaHei UI", font_size, "bold"),
             wraplength=wraplength,
@@ -528,7 +528,7 @@ def main():
         ok_btn = tk.Button(
             dialog,
             text="确 定",
-            font=("Microsoft YaHei UI", font_size + 2, "bold"),
+            font=("Microsoft YaHei UI", font_size + 1, "bold"),
             bg="#3498db",
             fg="white",
             activebackground="#0099f9",
@@ -974,7 +974,7 @@ def main():
         except Exception:
             pass
 
-        bg_color = "#3ee0f5"
+        bg_color = "#72eaff"
         dialog.configure(bg=bg_color)
 
         # 确保对话框可见并置前

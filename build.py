@@ -201,6 +201,7 @@ exe = EXE(
         "-m", "PyInstaller",
         "--clean",            # 清理临时文件
         "--noconfirm",        # 不询问覆盖
+        # "--windowed",
         "--upx-dir", r"D:\Programs\Python\Python312\Scripts",  # UPX 压缩路径
         spec_file,            # 使用 spec 文件打包
     ]
