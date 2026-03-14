@@ -234,19 +234,19 @@ class CaptureOverlay:
 
         # 在放大镜画布上显示坐标色值（左上角）
         self.coord_text_id = self.magnifier_canvas.create_text(
-            4,
+            2,
             9,
             anchor=tk.W,
             text="0|0",
-            fill="#00ffff",
+            fill="#00BBFD",
             font=("Microsoft YaHei UI", 8)
         )
         self.color_text_id = self.magnifier_canvas.create_text(
-            4,
-            25,
+            2,
+            23,
             anchor=tk.W,
             text="#000000",
-            fill="#00ffff",
+            fill="#00BBFD",
             font=("Microsoft YaHei UI", 8)
         )
 

@@ -194,7 +194,7 @@ class ScreenshotApp:
     def _create_widgets(self):
         """创建界面元素"""
         # 设置背景色
-        bg_color = '#3ee0f5'
+        bg_color = '#9DDEF7'#3ee0f5
         self.root.configure(bg=bg_color)
 
         # 主框架
@@ -202,9 +202,9 @@ class ScreenshotApp:
         main_frame.pack(fill=tk.BOTH, expand=True, padx=int(5 * self._scale_factor), pady=int(5 * self._scale_factor))
 
         # 按钮统一颜色
-        btn_bg = '#3498db'  # 按钮初始颜色
+        btn_bg = '#00BBFD'  # 按钮初始颜色
         btn_fg = 'white'      # 字体颜色
-        btn_checked_bg = '#0059e8'  # 勾选后深蓝色
+        btn_checked_bg = '#0083FC'  # 勾选后深蓝色
 
         # 根据缩放比例计算字体大小 # 字体系统自动缩放了，不需要再缩放
         capture_btn_font_size = max(11, int(13)) 
@@ -254,9 +254,9 @@ class ScreenshotApp:
     def _on_auto_save_changed(self):
         """自动保存状态改变"""
         if self.auto_save.get():
-            self.capture_btn.config(bg='#0059e8')
+            self.capture_btn.config(bg='#0083FC')
         else:
-            self.capture_btn.config(bg='#3498db')  # 恢复初始颜色
+            self.capture_btn.config(bg='#00BBFD')  # 恢复初始颜色
 
     def _update_capture_btn_text(self):
         """更新截图按钮文字，显示当前快捷键"""
@@ -476,7 +476,7 @@ def main():
         dialog = tk.Toplevel()
         dialog.title(title)
         dialog.resizable(False, False)
-        dialog.configure(bg="#72eaff")
+        dialog.configure(bg="#9DDEF7")
 
         # 根据缩放比例计算窗口尺寸
         base_width, base_height = 300, 120
@@ -516,7 +516,7 @@ def main():
         msg_label = tk.Label(
             dialog,
             text=message,
-            bg="#72eaff",
+            bg="#9DDEF7",
             fg="#053D97",
             font=("Microsoft YaHei UI", font_size, "bold"),
             wraplength=wraplength,
@@ -974,7 +974,7 @@ def main():
         except Exception:
             pass
 
-        bg_color = "#72eaff"
+        bg_color = "#9DDEF7" #72eaff
         dialog.configure(bg=bg_color)
 
         # 确保对话框可见并置前
@@ -1147,7 +1147,7 @@ def main():
 
         def on_ok():
             if not selected_key[0]:
-                _show_message("✂️设置快捷键", "请按下新的快捷键组合", "warning", dialog)
+                _show_message("✂️设置快捷键", "未更改新的快捷键", "warning", dialog)
                 return
             
             vk = _keysym_to_vk(selected_key[0])
