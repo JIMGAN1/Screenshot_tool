@@ -88,6 +88,7 @@ class ScreenshotApp:
         """
         self.root = root
         self.auto_save = tk.BooleanVar(value=False)
+        self.edit_after_capture = tk.BooleanVar(value=False)
         self.is_capturing = False
         # 是否在截图完成后恢复主界面（只有当用户主动“显示程序界面”后才为 True）
         self.restore_after_capture = False
@@ -251,6 +252,23 @@ class ScreenshotApp:
         )
         self.auto_save_cb.pack(fill=tk.X)
 
+        # 截图后编辑复选框
+        self.edit_after_capture_cb = tk.Checkbutton(
+            cb_frame,
+            text="截图后编辑",
+            variable=self.edit_after_capture,
+            font=('Microsoft YaHei UI', auto_save_font_size, 'bold'),
+            bg=btn_bg,
+            fg=btn_fg,
+            selectcolor=btn_checked_bg,
+            activebackground=btn_bg,
+            activeforeground=btn_fg,
+            cursor='hand2',
+            relief=tk.FLAT,
+            indicatoron=False,
+        )
+        self.edit_after_capture_cb.pack(fill=tk.X, pady=(int(3 * self._scale_factor), 0))
+
     def _on_auto_save_changed(self):
         """自动保存状态改变"""
         if self.auto_save.get():
@@ -324,7 +342,10 @@ class ScreenshotApp:
 
             # 把预先截好的底图传给覆盖层，后续所有取色/放大都基于这张图
             # 保留引用，避免对象被GC导致事件回调失效
-            self.overlay = CaptureOverlay(self.root, on_capture, on_cancel, base_image)
+            self.overlay = CaptureOverlay(
+                self.root, on_capture, on_cancel, base_image,
+                enable_edit=self.edit_after_capture.get()
+            )
         except Exception as e:
             print(f"创建覆盖层失败：{e}")
             self._on_capture_error(str(e))
@@ -1407,6 +1428,10 @@ def main():
             _set_windows_autostart(not _is_windows_autostart_enabled())
         root.after(0, toggle)
 
+    def on_tray_toggle_edit_after_capture(icon, item):
+        """切换截图后编辑"""
+        root.after(0, lambda: app.edit_after_capture.set(not app.edit_after_capture.get()))
+
     def on_tray_exit(icon, item):
         """退出程序"""
         icon.visible = False
@@ -1441,6 +1466,11 @@ def main():
                 '自动保存',
                 on_tray_toggle_auto_save,
                 checked=lambda item: app.auto_save.get()
+            ),
+            pystray.MenuItem(
+                '截图后编辑',
+                on_tray_toggle_edit_after_capture,
+                checked=lambda item: app.edit_after_capture.get()
             ),
             pystray.MenuItem(
                 '开机自启',

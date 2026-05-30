@@ -3,7 +3,7 @@
 """
 from time import perf_counter, sleep
 import tkinter as tk
-from PIL import Image, ImageGrab, ImageTk, ImageChops
+from PIL import Image, ImageDraw, ImageFont, ImageGrab, ImageTk, ImageChops
 from numpy import array, asarray, int16, any
 import mss
 from utils import copy_text_to_clipboard
@@ -52,7 +52,7 @@ GetLastError.restype = ctypes.c_uint
 class CaptureOverlay:
     """全屏框选覆盖层"""
 
-    def __init__(self, parent, on_capture, on_cancel=None, base_image=None):
+    def __init__(self, parent, on_capture, on_cancel=None, base_image=None, enable_edit=False):
         """
         初始化覆盖层
         :param parent: 父窗口
@@ -63,6 +63,9 @@ class CaptureOverlay:
         self.parent = parent
         self.on_capture = on_capture
         self.on_cancel = on_cancel
+        self.enable_edit = enable_edit
+        self.captured_image = None
+        self.captured_bbox = None
 
         # 创建全屏窗口
         self.root = tk.Toplevel(parent)
@@ -883,18 +886,417 @@ class CaptureOverlay:
             bbox = (abs_x1, abs_y1, abs_x2, abs_y2)
             image = ImageGrab.grab(bbox=bbox)
 
-            # 调用回调
-            if self.on_capture:
-                self.on_capture(image, bbox)
-
-            self._cleanup()
+            # 如果启用了编辑模式，显示编辑工具栏
+            if self.enable_edit:
+                self.captured_image = image
+                self.captured_bbox = bbox
+                self._show_edit_toolbar(abs_x1, abs_y1, abs_x2, abs_y2)
+            else:
+                # 直接调用回调
+                if self.on_capture:
+                    self.on_capture(image, bbox)
+                self._cleanup()
 
         except Exception as e:
             print(f"截图失败: {e}")
             self._cleanup()
 
+    def _show_edit_toolbar(self, x1, y1, x2, y2):
+        """显示编辑工具栏（在截图区域上显示截图并添加编辑功能）"""
+        # 截图区域尺寸
+        img_w = x2 - x1
+        img_h = y2 - y1
+
+        # 工具栏高度
+        toolbar_h = 45
+        toolbar_padding = 6
+
+        # 计算工具栏位置（截图区域下方）
+        toolbar_x = x1
+        toolbar_y = y2 + 2
+
+        # 检查屏幕边界
+        screen_h = self.root.winfo_screenheight()
+        if toolbar_y + toolbar_h > screen_h:
+            # 下方空间不足，放在截图区域上方
+            toolbar_y = y1 - toolbar_h - 2
+            if toolbar_y < 0:
+                toolbar_y = 5
+
+        toolbar_w = img_w
+        # 如果工具栏太窄，用最小宽度
+        if toolbar_w < 320:
+            toolbar_w = 320
+            toolbar_x = x1 - (toolbar_w - img_w) // 2
+            if toolbar_x < 0:
+                toolbar_x = 5
+
+        # 清除旧的画布内容，重新设置
+        self.canvas.delete('all')
+
+        # 设置 canvas 为透明背景（完全透明以显示下面的截图）
+        self.canvas.configure(bg='', highlightthickness=0)
+
+        # 重新创建 canvas 并添加截图显示
+        # 先隐藏原来的 canvas
+        self.canvas.pack_forget()
+
+        # 创建新的 frame 来包含截图和工具栏
+        if hasattr(self, 'edit_frame') and self.edit_frame:
+            try:
+                self.edit_frame.destroy()
+            except:
+                pass
+
+        self.edit_frame = tk.Frame(self.root, bg='#2d2d2d', cursor='default')
+        self.edit_frame.place(x=x1, y=y1, width=img_w, height=img_h + toolbar_h + 2)
+
+        # 截图显示区域
+        self.edit_canvas = tk.Canvas(
+            self.edit_frame,
+            width=img_w,
+            height=img_h,
+            bg='#333333',
+            highlightthickness=0,
+            confine=False,
+            cursor='cross'
+        )
+        self.edit_canvas.pack()
+
+        # 显示截图
+        self._edit_photo = ImageTk.PhotoImage(self.captured_image)
+        self.edit_canvas.create_image(0, 0, anchor=tk.NW, image=self._edit_photo)
+
+        # 绘图对象
+        self.edit_draw = ImageDraw.Draw(self.captured_image)
+
+        # 工具栏
+        toolbar = tk.Frame(self.edit_frame, bg='#2d2d2d', height=toolbar_h)
+        toolbar.pack(fill=tk.X, side=tk.BOTTOM)
+        toolbar.pack_propagate(False)
+
+        inner = tk.Frame(toolbar, bg='#2d2d2d', padx=toolbar_padding, pady=toolbar_padding)
+        inner.pack(fill=tk.BOTH, expand=True)
+
+        # 工具栏样式
+        btn_bg = '#4d4d4d'
+        btn_fg = 'white'
+        btn_active = '#00BBFD'
+
+        self.edit_tool = 'rect'
+        self.edit_color = '#FF0000'
+
+        # 左侧工具按钮
+        tools_left = tk.Frame(inner, bg='#2d2d2d')
+        tools_left.pack(side=tk.LEFT)
+
+        # 画框按钮
+        self.btn_rect = tk.Button(
+            tools_left, text='[ ]', width=4,
+            command=lambda: self._select_edit_tool('rect'),
+            bg=btn_active, fg=btn_fg,
+            font=('Consolas', 10, 'bold'),
+            relief=tk.RAISED, cursor='hand2', bd=1
+        )
+        self.btn_rect.pack(side=tk.LEFT, padx=2)
+
+        # 画笔按钮
+        self.btn_pen = tk.Button(
+            tools_left, text='/~~', width=4,
+            command=lambda: self._select_edit_tool('pen'),
+            bg=btn_bg, fg=btn_fg,
+            font=('Consolas', 10, 'bold'),
+            relief=tk.RAISED, cursor='hand2', bd=1
+        )
+        self.btn_pen.pack(side=tk.LEFT, padx=2)
+
+        # 打字按钮
+        self.btn_text = tk.Button(
+            tools_left, text='Abc', width=4,
+            command=lambda: self._select_edit_tool('text'),
+            bg=btn_bg, fg=btn_fg,
+            font=('Consolas', 10, 'bold'),
+            relief=tk.RAISED, cursor='hand2', bd=1
+        )
+        self.btn_text.pack(side=tk.LEFT, padx=2)
+
+        # 分隔线
+        sep1 = tk.Frame(inner, width=1, bg='#555555')
+        sep1.pack(side=tk.LEFT, fill=tk.Y, padx=8)
+
+        # 颜色选择
+        colors_frame = tk.Frame(inner, bg='#2d2d2d')
+        colors_frame.pack(side=tk.LEFT)
+
+        self.color_buttons = {}
+        colors = ['#FF0000', '#FF6B00', '#FFD600', '#00FF00', '#0000FF', '#9900FF', '#000000', '#FFFFFF']
+        for color in colors:
+            btn = tk.Button(
+                colors_frame, bg=color, width=2, height=1,
+                relief=tk.RAISED, cursor='hand2', bd=1,
+                command=lambda c=color: self._select_edit_color(c)
+            )
+            btn.pack(side=tk.LEFT, padx=1)
+            self.color_buttons[color] = btn
+
+        # 设置默认颜色高亮
+        self.color_buttons[self.edit_color].config(relief=tk.SUNKEN, bd=2)
+
+        # 分隔线
+        sep2 = tk.Frame(inner, width=1, bg='#555555')
+        sep2.pack(side=tk.LEFT, fill=tk.Y, padx=8)
+
+        # 右侧操作按钮
+        actions = tk.Frame(inner, bg='#2d2d2d')
+        actions.pack(side=tk.RIGHT)
+
+        # 取消按钮
+        btn_cancel = tk.Button(
+            actions, text='X', width=3,
+            command=self._edit_cancel,
+            bg='#666666', fg=btn_fg,
+            font=('Consolas', 10, 'bold'),
+            relief=tk.RAISED, cursor='hand2', bd=1
+        )
+        btn_cancel.pack(side=tk.LEFT, padx=2)
+
+        # 确定按钮
+        btn_ok = tk.Button(
+            actions, text='V', width=3,
+            command=self._edit_confirm,
+            bg='#00BBFD', fg=btn_fg,
+            font=('Consolas', 10, 'bold'),
+            relief=tk.RAISED, cursor='hand2', bd=1
+        )
+        btn_ok.pack(side=tk.LEFT, padx=2)
+
+        # 保存截图区域坐标
+        self.edit_bbox = (x1, y1, x2, y2)
+        self.edit_x1, self.edit_y1, self.edit_x2, self.edit_y2 = x1, y1, x2, y2
+
+        # 绑定鼠标事件
+        self.edit_canvas.bind('<Button-1>', self._edit_on_mouse_down)
+        self.edit_canvas.bind('<B1-Motion>', self._edit_on_mouse_drag)
+        self.edit_canvas.bind('<ButtonRelease-1>', self._edit_on_mouse_up)
+        self.edit_canvas.bind('<Double-Button-1>', self._edit_on_double_click)
+
+        # 绑定键盘事件到 frame
+        self.edit_frame.bind('<Key>', self._edit_on_key)
+        self.edit_frame.focus_set()
+
+        # 状态变量
+        self.edit_start = None
+        self.edit_pen_points = []
+        self.edit_pending_text = None
+
+    def _select_edit_tool(self, tool):
+        """选择编辑工具"""
+        self.edit_tool = tool
+
+        # 更新按钮样式
+        self.btn_rect.config(bg='#4d4d4d')
+        self.btn_pen.config(bg='#4d4d4d')
+        self.btn_text.config(bg='#4d4d4d')
+
+        if tool == 'rect':
+            self.btn_rect.config(bg='#00BBFD')
+            self.edit_canvas.config(cursor='cross')
+        elif tool == 'pen':
+            self.btn_pen.config(bg='#00BBFD')
+            self.edit_canvas.config(cursor='pencil')
+        elif tool == 'text':
+            self.btn_text.config(bg='#00BBFD')
+            self.edit_canvas.config(cursor='xterm')
+
+        # 如果有待确认的文本，提交它
+        if self.edit_pending_text:
+            self._commit_edit_text()
+
+    def _select_edit_color(self, color):
+        """选择编辑颜色"""
+        self.edit_color = color
+        # 更新颜色按钮高亮
+        for c, btn in self.color_buttons.items():
+            if c == color:
+                btn.config(relief=tk.SUNKEN, bd=2)
+            else:
+                btn.config(relief=tk.RAISED, bd=1)
+
+    def _edit_on_mouse_down(self, event):
+        """编辑画布鼠标按下"""
+        x, y = event.x, event.y
+
+        if self.edit_tool == 'rect':
+            self.edit_start = (x, y)
+            self._edit_rect_preview = None
+        elif self.edit_tool == 'pen':
+            self.edit_pen_points = [(x, y)]
+            self._edit_pen_preview_ids = []
+        elif self.edit_tool == 'text':
+            # 直接弹出输入框
+            self._prompt_edit_text(x, y)
+
+    def _edit_on_mouse_drag(self, event):
+        """编辑画布鼠标拖动"""
+        x, y = event.x, event.y
+
+        if self.edit_tool == 'rect' and self.edit_start:
+            # 删除旧预览
+            if self._edit_rect_preview:
+                self.edit_canvas.delete(self._edit_rect_preview)
+            # 画新预览
+            x1, y1 = self.edit_start
+            self._edit_rect_preview = self.edit_canvas.create_rectangle(
+                x1, y1, x, y,
+                outline=self.edit_color,
+                width=2
+            )
+        elif self.edit_tool == 'pen':
+            # 画新线段
+            if len(self.edit_pen_points) >= 1:
+                x1, y1 = self.edit_pen_points[-1]
+                pid = self.edit_canvas.create_line(
+                    x1, y1, x, y,
+                    fill=self.edit_color,
+                    width=2
+                )
+                self._edit_pen_preview_ids.append(pid)
+            self.edit_pen_points.append((x, y))
+
+    def _edit_on_mouse_up(self, event):
+        """编辑画布鼠标释放"""
+        x, y = event.x, event.y
+
+        if self.edit_tool == 'rect' and self.edit_start:
+            # 删除预览
+            if self._edit_rect_preview:
+                self.edit_canvas.delete(self._edit_rect_preview)
+                self._edit_rect_preview = None
+            # 画到图片上
+            x1, y1 = self.edit_start
+            self.edit_draw.rectangle([x1, y1, x, y], outline=self.edit_color, width=2)
+            # 更新显示
+            self._refresh_edit_image()
+            self.edit_start = None
+        elif self.edit_tool == 'pen':
+            # 将所有线段画到图片上
+            if len(self.edit_pen_points) >= 2:
+                for i in range(len(self.edit_pen_points) - 1):
+                    x1, y1 = self.edit_pen_points[i]
+                    x2, y2 = self.edit_pen_points[i + 1]
+                    self.edit_draw.line([x1, y1, x2, y2], fill=self.edit_color, width=2)
+            # 清除预览
+            for pid in getattr(self, '_edit_pen_preview_ids', []):
+                self.edit_canvas.delete(pid)
+            self._edit_pen_preview_ids = []
+            self.edit_pen_points = []
+            # 更新显示
+            self._refresh_edit_image()
+
+    def _edit_on_double_click(self, event):
+        """编辑画布双击"""
+        if self.edit_tool == 'text':
+            self._prompt_edit_text(event.x, event.y)
+
+    def _prompt_edit_text(self, x, y):
+        """弹出文本输入对话框"""
+        # 先提交待确认的文本
+        if self.edit_pending_text:
+            self._commit_edit_text()
+
+        # 弹出输入框
+        from tkinter import simpledialog
+        text = simpledialog.askstring(
+            "输入文字",
+            "请输入要添加的文字:",
+            parent=self.edit_overlay
+        )
+        if text:
+            self.edit_pending_text = {'x': x, 'y': y, 'text': text}
+            self._commit_edit_text()
+
+    def _commit_edit_text(self):
+        """提交文本到图片"""
+        if not self.edit_pending_text:
+            return
+
+        x = self.edit_pending_text['x']
+        y = self.edit_pending_text['y']
+        text = self.edit_pending_text['text']
+
+        # 画到图片上
+        try:
+            font = ImageFont.truetype("msyh.ttc", 16)
+        except:
+            font = ImageFont.load_default()
+
+        self.edit_draw.text((x, y), text, fill=self.edit_color, font=font)
+        self.edit_pending_text = None
+
+        # 更新显示
+        self._refresh_edit_image()
+
+    def _refresh_edit_image(self):
+        """刷新编辑图片显示"""
+        # 清除画布
+        self.edit_canvas.delete('all')
+        # 重新显示图片
+        self._edit_photo = ImageTk.PhotoImage(self.captured_image)
+        self.edit_canvas.create_image(0, 0, anchor=tk.NW, image=self._edit_photo)
+
+    def _edit_on_key(self, event):
+        """编辑键盘事件"""
+        if event.keysym == 'Escape':
+            self._edit_cancel()
+        elif event.keysym == 'Return':
+            if self.edit_pending_text:
+                self._commit_edit_text()
+
+    def _edit_confirm(self):
+        """确认编辑"""
+        # 提交待确认的文本
+        if self.edit_pending_text:
+            self._commit_edit_text()
+
+        # 调用回调
+        if self.on_capture:
+            self.on_capture(self.captured_image, self.edit_bbox)
+
+        # 清理
+        self._cleanup_edit()
+        self._cleanup()
+
+    def _edit_cancel(self):
+        """取消编辑"""
+        # 清理
+        self._cleanup_edit()
+        self._cleanup()
+
+    def _cleanup_edit(self):
+        """清理编辑相关资源"""
+        if hasattr(self, 'edit_toolbar') and self.edit_toolbar:
+            try:
+                self.edit_toolbar.destroy()
+            except:
+                pass
+        if hasattr(self, 'edit_overlay') and self.edit_overlay:
+            try:
+                self.edit_overlay.destroy()
+            except:
+                pass
+        if hasattr(self, 'edit_frame') and self.edit_frame:
+            try:
+                self.edit_frame.destroy()
+            except:
+                pass
+
     def _cancel(self):
         """取消截图"""
+        # 如果正在编辑模式，先取消编辑
+        if self.enable_edit and hasattr(self, 'edit_frame') and self.edit_frame:
+            self._edit_cancel()
+            return
+
         # 如果正在进行长截图，取消它
         if self.is_long_capture_active:
             self.long_capture_cancelled = True
