@@ -18,7 +18,7 @@ PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 os.chdir(PROJECT_DIR)
 
 # 版本号
-VERSION = "2.6.8"
+VERSION = "3.7.0"
 
 # GitHub信息
 GITHUB_URL = "https://github.com/JIMGAN1/screenshot-tool"
@@ -79,7 +79,7 @@ VSVersionInfo(
     temp_file.close()
     
     # 打印临时文件位置
-    print(f"📝 临时文件创建在：{temp_file.name}")
+    print(f"[INFO] 临时文件创建在：{temp_file.name}")
     return temp_file.name
 
 
@@ -88,14 +88,14 @@ def build():
     # 简单提示当前环境，建议在 JT_conda 虚拟环境中执行
     conda_env = os.environ.get("CONDA_DEFAULT_ENV", "")
     if conda_env and conda_env != "JT_conda":
-        print(f"⚠ 当前 Conda 环境为：{conda_env}，建议在 JT_conda 环境中执行打包（conda activate JT_conda）")
+        print(f"[WARN] 当前 Conda 环境为：{conda_env}，建议在 JT_conda 环境中执行打包（conda activate JT_conda）")
 
     # 获取版本号
     version = sys.argv[1] if len(sys.argv) > 1 else VERSION
     
     # 创建临时版本文件（在当前目录）
     version_file = create_temp_version_file(version)
-    print(f"✅ 创建临时版本文件：{version_file}")
+    print(f"[OK] 创建临时版本文件：{version_file}")
 
     # ---- 排除不需要的标准库和第三方模块，大幅减小体积 ----
     excludes = [
@@ -227,7 +227,7 @@ exe = EXE(
         # 清理临时文件（确保无论成功失败都会清理）
         if os.path.exists(version_file):
             os.remove(version_file)
-            print(f"✅ 已清理临时文件：{version_file}")
+            print(f"[OK] 已清理临时文件：{version_file}")
 
 
 if __name__ == "__main__":

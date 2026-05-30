@@ -19,6 +19,76 @@ from capture_overlay import CaptureOverlay
 from utils import save_screenshot, copy_to_clipboard
 
 
+# ==================== 注册表操作（模块级函数）====================
+
+def _is_windows_autostart_enabled() -> bool:
+    """检查开机自启是否启用"""
+    if not sys.platform.startswith("win"):
+        return False
+    try:
+        import winreg
+        run_key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
+        value_name = "ScreenshotTool"
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, run_key_path, 0, winreg.KEY_READ) as key:
+            winreg.QueryValueEx(key, value_name)
+        return True
+    except (FileNotFoundError, OSError):
+        return False
+
+def _set_windows_autostart(enabled: bool) -> None:
+    """设置开机自启"""
+    if not sys.platform.startswith("win"):
+        return
+    try:
+        import winreg
+        run_key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
+        value_name = "ScreenshotTool"
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, run_key_path) as key:
+            if enabled:
+                winreg.SetValueEx(key, value_name, 0, winreg.REG_SZ, _get_autostart_command())
+            else:
+                try:
+                    winreg.DeleteValue(key, value_name)
+                except FileNotFoundError:
+                    pass
+    except OSError:
+        pass
+
+def _is_edit_after_capture_enabled() -> bool:
+    """检查截图后编辑设置是否启用"""
+    if not sys.platform.startswith("win"):
+        return False
+    try:
+        import winreg
+        key_path = r"Software\ScreenshotTool"
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_READ) as key:
+            value, _ = winreg.QueryValueEx(key, "EditAfterCapture")
+            return bool(value)
+    except (FileNotFoundError, OSError):
+        return False
+
+def _set_edit_after_capture(enabled: bool) -> None:
+    """保存截图后编辑设置"""
+    if not sys.platform.startswith("win"):
+        return
+    try:
+        import winreg
+        key_path = r"Software\ScreenshotTool"
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, key_path) as key:
+            winreg.SetValueEx(key, "EditAfterCapture", 0, winreg.REG_DWORD, 1 if enabled else 0)
+    except OSError:
+        pass
+
+def _get_autostart_command() -> str:
+    """获取开机自启命令"""
+    if getattr(sys, "frozen", False):
+        exe_path = os.path.abspath(sys.executable)
+        return f'"{exe_path}"'
+    python_exe = os.path.abspath(sys.executable)
+    script_path = os.path.abspath(sys.argv[0] if sys.argv else __file__)
+    return f'"{python_exe}" "{script_path}"'
+
+
 # ==================== Windows 虚拟键码 ====================
 VK_SNAPSHOT = 0x2C  # PrintScreen
 VK_CONTROL = 0x11
@@ -88,6 +158,7 @@ class ScreenshotApp:
         """
         self.root = root
         self.auto_save = tk.BooleanVar(value=False)
+        self.edit_after_capture = tk.BooleanVar(value=_is_edit_after_capture_enabled())
         self.is_capturing = False
         # 是否在截图完成后恢复主界面（只有当用户主动“显示程序界面”后才为 True）
         self.restore_after_capture = False
@@ -230,10 +301,29 @@ class ScreenshotApp:
         # 启动后更新按钮文字（添加快捷键）
         self.root.after(500, self._update_capture_btn_text)
 
+        # 截图后编辑复选框
+        cb_frame = tk.Frame(main_frame, bg=bg_color)
+        cb_frame.pack(fill=tk.X)
+        self.edit_after_capture_cb = tk.Checkbutton(
+            cb_frame,
+            text="截图后编辑",
+            variable=self.edit_after_capture,
+            font=('Microsoft YaHei UI', auto_save_font_size, 'bold'),
+            bg=btn_bg,
+            fg=btn_fg,
+            selectcolor=btn_checked_bg,
+            activebackground=btn_bg,
+            activeforeground=btn_fg,
+            cursor='hand2',
+            relief=tk.FLAT,
+            indicatoron=False,
+            command=lambda: _set_edit_after_capture(self.edit_after_capture.get())
+        )
+        self.edit_after_capture_cb.pack(fill=tk.X, pady=(int(3 * self._scale_factor), 0))
+
         # 自动保存复选框
         cb_frame = tk.Frame(main_frame, bg=bg_color)
         cb_frame.pack(fill=tk.X)
-
         self.auto_save_cb = tk.Checkbutton(
             cb_frame,
             text="自动保存",
@@ -316,15 +406,39 @@ class ScreenshotApp:
             # 使用 mss 的主监视器信息截取整屏图像（包含任务栏），
             # 作为放大镜/取色以及“桌面全屏截图”的真实基准尺寸。
             with mss.mss() as sct:
-                monitor = sct.monitors[1]  # 主显示器
-                screenshot = sct.grab(monitor)
-                base_image = Image.frombytes(
-                    "RGB", screenshot.size, screenshot.bgra, "raw", "BGRX"
-                )
+                monitors = sct.monitors
+                
+                if len(monitors) <= 2:
+                    # 只有1个显示器
+                    monitor = sct.monitors[1]
+                    screenshot = sct.grab(monitor)
+                    base_image = Image.frombytes(
+                        "RGB", screenshot.size, screenshot.bgra, "raw", "BGRX"
+                    )
+                else:
+                    # 多显示器拼接
+                    valid_monitors = [m for i, m in enumerate(monitors) if i > 0]
+                    all_left = min(m.left for m in valid_monitors)
+                    all_top = min(m.top for m in valid_monitors)
+                    all_right = max(m.left + m.width for m in valid_monitors)
+                    all_bottom = max(m.top + m.height for m in valid_monitors)
+                    total_width = all_right - all_left
+                    total_height = all_bottom - all_top
+                    base_image = Image.new('RGB', (total_width, total_height))
+                    for monitor in valid_monitors:
+                        screenshot = sct.grab(monitor)
+                        img = Image.frombytes("RGB", screenshot.size, screenshot.bgra, "raw", "BGRX")
+                        x = monitor.left - all_left
+                        y = monitor.top - all_top
+                        base_image.paste(img, (x, y))
 
             # 把预先截好的底图传给覆盖层，后续所有取色/放大都基于这张图
             # 保留引用，避免对象被GC导致事件回调失效
-            self.overlay = CaptureOverlay(self.root, on_capture, on_cancel, base_image)
+            self.overlay = CaptureOverlay(
+                self.root, on_capture, on_cancel, base_image,
+                enable_edit=self.edit_after_capture.get(),
+                fullscreen_offset=(0, 0)
+            )
         except Exception as e:
             print(f"创建覆盖层失败：{e}")
             self._on_capture_error(str(e))
@@ -1349,62 +1463,18 @@ def main():
             app._on_auto_save_changed()
         root.after(0, toggle)
 
-    def _get_autostart_command() -> str:
-        """
-        返回写入 Windows Run 注册表的启动命令。
-
-        - PyInstaller 打包后：使用 exe 路径
-        - 源码运行：使用 python.exe + 当前脚本路径
-        """
-        if getattr(sys, "frozen", False):
-            exe_path = os.path.abspath(sys.executable)
-            return f'"{exe_path}"'
-
-        python_exe = os.path.abspath(sys.executable)
-        script_path = os.path.abspath(sys.argv[0] if sys.argv else __file__)
-        return f'"{python_exe}" "{script_path}"'
-
-    def _is_windows_autostart_enabled() -> bool:
-        if not sys.platform.startswith("win"):
-            return False
-        try:
-            import winreg  # type: ignore
-
-            run_key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
-            value_name = "ScreenshotTool"
-            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, run_key_path, 0, winreg.KEY_READ) as key:
-                winreg.QueryValueEx(key, value_name)
-            return True
-        except FileNotFoundError:
-            return False
-        except OSError:
-            # 权限/注册表异常时，不影响主功能
-            return False
-
-    def _set_windows_autostart(enabled: bool) -> None:
-        if not sys.platform.startswith("win"):
-            return
-        try:
-            import winreg  # type: ignore
-
-            run_key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
-            value_name = "ScreenshotTool"
-            with winreg.CreateKey(winreg.HKEY_CURRENT_USER, run_key_path) as key:
-                if enabled:
-                    winreg.SetValueEx(key, value_name, 0, winreg.REG_SZ, _get_autostart_command())
-                else:
-                    try:
-                        winreg.DeleteValue(key, value_name)
-                    except FileNotFoundError:
-                        pass
-        except OSError:
-            # 权限/注册表异常时，不影响主功能
-            pass
-
     def on_tray_toggle_autostart(icon, item):
         """切换开机自启"""
         def toggle():
             _set_windows_autostart(not _is_windows_autostart_enabled())
+        root.after(0, toggle)
+
+    def on_tray_toggle_edit_after_capture(icon, item):
+        """切换截图后编辑"""
+        def toggle():
+            new_value = not app.edit_after_capture.get()
+            app.edit_after_capture.set(new_value)
+            _set_edit_after_capture(new_value)
         root.after(0, toggle)
 
     def on_tray_exit(icon, item):
@@ -1436,6 +1506,11 @@ def main():
                 '设置快捷键',
                 on_tray_set_hotkey,
                 enabled=lambda item: sys.platform.startswith("win"),
+            ),
+            pystray.MenuItem(
+                '截图后编辑',
+                on_tray_toggle_edit_after_capture,
+                checked=lambda item: app.edit_after_capture.get()
             ),
             pystray.MenuItem(
                 '自动保存',
