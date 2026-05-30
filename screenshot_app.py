@@ -334,17 +334,38 @@ class ScreenshotApp:
             # 使用 mss 的主监视器信息截取整屏图像（包含任务栏），
             # 作为放大镜/取色以及“桌面全屏截图”的真实基准尺寸。
             with mss.mss() as sct:
-                monitor = sct.monitors[1]  # 主显示器
-                screenshot = sct.grab(monitor)
-                base_image = Image.frombytes(
-                    "RGB", screenshot.size, screenshot.bgra, "raw", "BGRX"
-                )
+                monitors = sct.monitors
+                
+                if len(monitors) <= 2:
+                    # 只有1个显示器
+                    monitor = sct.monitors[1]
+                    screenshot = sct.grab(monitor)
+                    base_image = Image.frombytes(
+                        "RGB", screenshot.size, screenshot.bgra, "raw", "BGRX"
+                    )
+                else:
+                    # 多显示器拼接
+                    valid_monitors = [m for i, m in enumerate(monitors) if i > 0]
+                    all_left = min(m.left for m in valid_monitors)
+                    all_top = min(m.top for m in valid_monitors)
+                    all_right = max(m.left + m.width for m in valid_monitors)
+                    all_bottom = max(m.top + m.height for m in valid_monitors)
+                    total_width = all_right - all_left
+                    total_height = all_bottom - all_top
+                    base_image = Image.new('RGB', (total_width, total_height))
+                    for monitor in valid_monitors:
+                        screenshot = sct.grab(monitor)
+                        img = Image.frombytes("RGB", screenshot.size, screenshot.bgra, "raw", "BGRX")
+                        x = monitor.left - all_left
+                        y = monitor.top - all_top
+                        base_image.paste(img, (x, y))
 
             # 把预先截好的底图传给覆盖层，后续所有取色/放大都基于这张图
             # 保留引用，避免对象被GC导致事件回调失效
             self.overlay = CaptureOverlay(
                 self.root, on_capture, on_cancel, base_image,
-                enable_edit=self.edit_after_capture.get()
+                enable_edit=self.edit_after_capture.get(),
+                fullscreen_offset=(0, 0)
             )
         except Exception as e:
             print(f"创建覆盖层失败：{e}")

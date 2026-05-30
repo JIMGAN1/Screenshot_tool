@@ -52,7 +52,7 @@ GetLastError.restype = ctypes.c_uint
 class CaptureOverlay:
     """全屏框选覆盖层"""
 
-    def __init__(self, parent, on_capture, on_cancel=None, base_image=None, enable_edit=False):
+    def __init__(self, parent, on_capture, on_cancel=None, base_image=None, enable_edit=False, fullscreen_offset=(0, 0)):
         """
         初始化覆盖层
         :param parent: 父窗口
@@ -66,6 +66,7 @@ class CaptureOverlay:
         self.enable_edit = enable_edit
         self.captured_image = None
         self.captured_bbox = None
+        self.fullscreen_offset = fullscreen_offset
 
         # 创建全屏窗口
         self.root = tk.Toplevel(parent)
@@ -79,8 +80,8 @@ class CaptureOverlay:
         screen_w = self.root.winfo_screenwidth()
         screen_h = self.root.winfo_screenheight()
         self.root.geometry(f"{screen_w}x{screen_h}+0+0")
-        # 稍微提高整体不透明度，让提示文字/高亮更清晰，但仍保持半透明遮罩
-        self.root.attributes('-alpha', 0.3)
+        # 设置半透明黑色背景（覆盖层效果）
+        self.root.attributes('-alpha', 1)
 
         # 创建后尽量将覆盖层设置为前台窗口，确保 ESC 等按键事件发送到本窗口
         try:
@@ -116,7 +117,7 @@ class CaptureOverlay:
         self.magnifier_size = 120  # 放大显示尺寸
         self.pixel_size = 5
 
-        # 创建全屏遮罩
+        # 创建全屏遮罩和背景
         self.canvas = tk.Canvas(
             self.root,
             bg='black',
@@ -124,6 +125,15 @@ class CaptureOverlay:
             cursor='cross'
         )
         self.canvas.pack(fill=tk.BOTH, expand=True)
+        
+        # 显示预截图背景（让用户看到静态画面）
+        if self.fullscreen_image is not None:
+            self._bg_photo = ImageTk.PhotoImage(self.fullscreen_image)
+            self.bg_id = self.canvas.create_image(0, 0, anchor=tk.NW, image=self._bg_photo)
+            # 设置 canvas 滚动区域以支持大图片
+            self.canvas.configure(scrollregion=(0, 0, self.fullscreen_image.width, self.fullscreen_image.height))
+            # 把背景图放到最底层，确保框在最上层
+            self.canvas.tag_lower(self.bg_id)
 
         # 绑定事件
         # 使用 bind_all 确保在放大镜等子窗口获得焦点时，ESC 也能生效
@@ -199,175 +209,159 @@ class CaptureOverlay:
             pass  # 忽略获取鼠标位置的错误
 
     def _create_magnifier(self):
-        """创建放大器窗口"""
-        # 放大镜单独作为顶层窗口挂在主窗口之上
-        self.magnifier_window = tk.Toplevel(self.parent)
-        self.magnifier_window.overrideredirect(True)
-        self.magnifier_window.attributes('-topmost', True)
-        self.magnifier_window.configure(bg='#1a1a2e')
-
-        # 让放大镜窗口也响应 ESC 取消（防止焦点在此窗口时 ESC 无效）
-        self.magnifier_window.bind('<Escape>', self._on_escape)
-
-        # 主框架
-        main_frame = tk.Frame(self.magnifier_window, bg='#1a1a2e')
-        main_frame.pack()
-
-        # 放大镜画布
-        self.magnifier_canvas = tk.Canvas(
-            main_frame,
-            width=self.magnifier_size - 1,
-            height=self.magnifier_size - 1,
-            bg='white',
-            highlightthickness=1,
-            highlightbackground='#444'
+        """创建放大镜（在 canvas 上绘制）"""
+        # 放大镜边框
+        border_offset = 1
+        self.mag_border_id = self.canvas.create_rectangle(
+            0, 0, self.magnifier_size, self.magnifier_size,
+            outline='#444', width=border_offset, fill='#1a1a2e'
         )
-        self.magnifier_canvas.pack()
-
-        # 添加中心十字线
+        
+        # 放大镜内容（初始化为空白）
+        self.mag_image_id = self.canvas.create_image(
+            0, 0, anchor=tk.NW
+        )
+        
+        # 中心十字线
         center = self.magnifier_size // 2
-        self.magnifier_canvas.create_line(
+        self.mag_center_h = self.canvas.create_line(
             0, center, self.magnifier_size, center,
-            fill="#00aaff", width=1, tags='center'
+            fill="#00aaff", width=1
         )
-        self.magnifier_canvas.create_line(
+        self.mag_center_v = self.canvas.create_line(
             center, 0, center, self.magnifier_size,
-            fill='#00aaff', width=1, tags='center'
+            fill='#00aaff', width=1
         )
-
-        # 在放大镜画布上显示坐标色值（左上角）
-        self.coord_text_id = self.magnifier_canvas.create_text(
-            2,
-            9,
-            anchor=tk.W,
-            text="0|0",
-            fill="#00BBFD",
+        
+        # 坐标和颜色文字
+        self.mag_coord_id = self.canvas.create_text(
+            2, 9, anchor=tk.NW, text="0|0", fill="#00BBFD",
             font=("Microsoft YaHei UI", 8)
         )
-        self.color_text_id = self.magnifier_canvas.create_text(
-            2,
-            23,
-            anchor=tk.W,
-            text="#000000",
-            fill="#00BBFD",
+        self.mag_color_id = self.canvas.create_text(
+            2, 23, anchor=tk.NW, text="#000000", fill="#00BBFD",
             font=("Microsoft YaHei UI", 8)
         )
+        
+        # 初始隐藏
+        self._hide_magnifier()
+    
+    def _hide_magnifier(self):
+        """隐藏放大镜"""
+        if hasattr(self, 'mag_border_id'):
+            self.canvas.itemconfigure(self.mag_border_id, state='hidden')
+            self.canvas.itemconfigure(self.mag_image_id, state='hidden')
+            self.canvas.itemconfigure(self.mag_center_h, state='hidden')
+            self.canvas.itemconfigure(self.mag_center_v, state='hidden')
+            self.canvas.itemconfigure(self.mag_coord_id, state='hidden')
+            self.canvas.itemconfigure(self.mag_color_id, state='hidden')
+    
+    def _show_magnifier(self):
+        """显示放大镜"""
+        if hasattr(self, 'mag_border_id'):
+            self.canvas.itemconfigure(self.mag_border_id, state='normal')
+            self.canvas.itemconfigure(self.mag_image_id, state='normal')
+            self.canvas.itemconfigure(self.mag_center_h, state='normal')
+            self.canvas.itemconfigure(self.mag_center_v, state='normal')
+            self.canvas.itemconfigure(self.mag_coord_id, state='normal')
+            self.canvas.itemconfigure(self.mag_color_id, state='normal')
 
     def _update_magnifier(self, x, y):
-        """更新放大器显示"""
+        """更新放大镜显示"""
         try:
-            # 转换为屏幕绝对坐标
-            screen_x = self.root.winfo_rootx() + x
-            screen_y = self.root.winfo_rooty() + y
-            screen_w = self.root.winfo_screenwidth()
+            # 显示放大镜
+            self._show_magnifier()
+            
+            # 从预截图裁切放大区域
             capture_size = 20
-
-            # 如果有预先截好的整屏图，就从那张图里裁切，完全不受遮罩影响
             if self.fullscreen_image is not None:
-                left = max(0, screen_x - capture_size // 2)
-                top = max(0, screen_y - capture_size // 2)
+                left = max(0, int(x) - capture_size // 2)
+                top = max(0, int(y) - capture_size // 2)
                 right = left + capture_size
                 bottom = top + capture_size
-
-                # 边界裁剪
                 right = min(right, self.fullscreen_image.width)
                 bottom = min(bottom, self.fullscreen_image.height)
                 left = max(0, right - capture_size)
                 top = max(0, bottom - capture_size)
-
                 img = self.fullscreen_image.crop((left, top, right, bottom))
             else:
-                pass
-                # 兜底逻辑：没有预截图时，仍然用 mss 实时截取 颜色不准弃用
-                # with mss.mss() as sct:
-                #     monitor = {
-                #         "left": max(0, screen_x - capture_size // 2),
-                #         "top": max(0, screen_y - capture_size // 2),
-                #         "width": capture_size,
-                #         "height": capture_size
-                #     }
-                #     screenshot = sct.grab(monitor)
-                #     img = Image.frombytes("RGB", screenshot.size, screenshot.bgra, "raw", "BGRX")
+                img = Image.new('RGB', (capture_size, capture_size), 'black')
 
-            # 放大图像
+            # 放大图像并更新 canvas
             img = img.resize((self.magnifier_size, self.magnifier_size), Image.NEAREST)
-
-            # 转换为 PhotoImg
             photo = ImageTk.PhotoImage(img)
+            self.canvas.itemconfigure(self.mag_image_id, image=photo)
+            self.canvas.mag_photo = photo  # 保持引用
 
-            # 更新画布
-            self.magnifier_canvas.delete("magnified")
-            self.magnifier_canvas.create_image(0, 0, anchor=tk.NW, image=photo, tag="magnified")
-            self.magnifier_canvas.image = photo  # 保持引用
-
-            # 确保十字线和文本始终在最上层
-            self.magnifier_canvas.tag_raise('center')
-            self.magnifier_canvas.tag_raise(self.coord_text_id)
-            self.magnifier_canvas.tag_raise(self.color_text_id)
-
-            # 更新坐标和颜色显示（绘制在放大镜画布上）
-            coord_text = f"{screen_x}|{screen_y}"
-            self.magnifier_canvas.itemconfig(self.coord_text_id, text=coord_text)
-            self.magnifier_canvas.itemconfig(self.color_text_id, text=self.current_color)
-
-            # 更新放大器位置（鼠标左上角，如被遮挡则显示右下角）
+            # 计算放大镜位置
             offset_x = 15
             offset_y = 15
-
-            # 默认显示在鼠标左上角（坐标色值在放大器左上角，所以整体下移）
             mag_x = x - offset_x - self.magnifier_size - 3
             mag_y = y - offset_y - self.magnifier_size - 3
-
-            # 检查是否超出左边界或上边界
+            
             if mag_x < 0:
-                # 显示在鼠标右下角
                 mag_x = x + offset_x
             if mag_y < 0:
-                # 显示在鼠标右下角
                 mag_y = y + offset_y
-
-            # 确保不超出右边界
-            if mag_x + self.magnifier_size > screen_w:
-                mag_x = x - self.magnifier_size - offset_x
-
-            # 将画布坐标转换为屏幕坐标后再移动放大镜窗口
-            win_x = self.root.winfo_rootx() + mag_x
-            win_y = self.root.winfo_rooty() + mag_y
-            self.magnifier_window.geometry(f"+{win_x}+{win_y}")
+            
+            # 更新所有元素的位置
+            self.canvas.coords(self.mag_border_id, mag_x, mag_y, 
+                             mag_x + self.magnifier_size, mag_y + self.magnifier_size)
+            self.canvas.coords(self.mag_image_id, mag_x, mag_y)
+            
+            center = self.magnifier_size // 2
+            self.canvas.coords(self.mag_center_h, mag_x, mag_y + center, 
+                             mag_x + self.magnifier_size, mag_y + center)
+            self.canvas.coords(self.mag_center_v, mag_x + center, mag_y, 
+                             mag_x + center, mag_y + self.magnifier_size)
+            
+            # 文字位置
+            self.canvas.coords(self.mag_coord_id, mag_x + 2, mag_y + 9)
+            self.canvas.coords(self.mag_color_id, mag_x + 2, mag_y + 23)
+            
+            # 更新文字内容
+            screen_x = self.root.winfo_rootx() + x
+            screen_y = self.root.winfo_rooty() + y
+            self.canvas.itemconfigure(self.mag_coord_id, text=f"{int(screen_x)}|{int(screen_y)}")
+            self.canvas.itemconfigure(self.mag_color_id, text=self.current_color)
+            
+            # 确保放大镜在最上层
+            self.canvas.tag_raise(self.mag_border_id)
+            self.canvas.tag_raise(self.mag_image_id)
+            self.canvas.tag_raise(self.mag_center_h)
+            self.canvas.tag_raise(self.mag_center_v)
+            self.canvas.tag_raise(self.mag_coord_id)
+            self.canvas.tag_raise(self.mag_color_id)
 
         except Exception:
-            # 放大镜更新失败不应影响主流程
             pass
 
     def _get_pixel_color(self, x, y):
-        """获取像素颜色（使用屏幕绝对坐标）"""
+        """获取像素颜色（使用预截图的图像坐标）"""
         try:
-            # 转换为屏幕绝对坐标
-            screen_x = self.root.winfo_rootx() + x
-            screen_y = self.root.winfo_rooty() + y
-
-            # 如果有预先截好的整屏图，优先使用这张图来取色，完全不受遮罩影响
+            # canvas 坐标直接对应预截图的图像坐标
             if self.fullscreen_image is not None:
                 if (
-                    0 <= screen_x < self.fullscreen_image.width
-                    and 0 <= screen_y < self.fullscreen_image.height
+                    0 <= x < self.fullscreen_image.width
+                    and 0 <= y < self.fullscreen_image.height
                 ):
-                    r, g, b = self.fullscreen_image.getpixel((screen_x, screen_y))
+                    r, g, b = self.fullscreen_image.getpixel((int(x), int(y)))
                     return f"#{r:02X}{g:02X}{b:02X}"
-
-            # 没有预截图时，直接使用 mss 截取 1 像素进行取色，避免窗口 DC 相关复杂逻辑
+            
+            # 没有预截图时，转换为屏幕坐标用 mss 取色
+            screen_x = self.root.winfo_rootx() + x
+            screen_y = self.root.winfo_rooty() + y
             try:
                 with mss.mss() as sct:
                     monitor = {
-                        "left": screen_x,
-                        "top": screen_y,
+                        "left": int(screen_x),
+                        "top": int(screen_y),
                         "width": 1,
                         "height": 1,
                     }
                     screenshot = sct.grab(monitor)
                     pixel = screenshot.pixel(0, 0)
-                    r_raw, g_raw, b_raw = pixel[0], pixel[1], pixel[2]
-                    return f"#{r_raw:02X}{g_raw:02X}{b_raw:02X}"
+                    return f"#{pixel[0]:02X}{pixel[1]:02X}{pixel[2]:02X}"
             except Exception:
                 return "#000000"
         except Exception:
@@ -871,8 +865,7 @@ class CaptureOverlay:
             except Exception:
                 pass
 
-            # 隐藏覆盖层
-            self.root.withdraw()
+            # 从预截图裁剪，无需隐藏覆盖层
 
             # 截图逻辑恢复为最初的实现：统一按照覆盖层坐标换算成屏幕坐标来抓图，
             # 不区分“桌面全屏”与否，避免引入额外的不一致行为。
@@ -884,17 +877,23 @@ class CaptureOverlay:
             abs_y2 = screen_y + y2
 
             bbox = (abs_x1, abs_y1, abs_x2, abs_y2)
-            image = ImageGrab.grab(bbox=bbox)
+            # 直接从预先截取的全屏图中裁剪，完全避免重复截图导致的界面变化
+            if self.fullscreen_image is not None:
+                image = self.fullscreen_image.crop(bbox)
+            else:
+                # 兜底：如果没有预截图（理论上不应发生），临时截取
+                image = ImageGrab.grab(bbox=bbox)
 
             # 如果启用了编辑模式，显示编辑工具栏
             if self.enable_edit:
                 self.captured_image = image
-                self.captured_bbox = bbox
-                self._show_edit_toolbar(abs_x1, abs_y1, abs_x2, abs_y2)
+                self.captured_bbox = (abs_x1, abs_y1, abs_x2, abs_y2)
+                # 编辑工具栏使用图片的相对坐标 (0,0,w,h)
+                self._show_edit_toolbar(0, 0, image.width, image.height)
             else:
                 # 直接调用回调
                 if self.on_capture:
-                    self.on_capture(image, bbox)
+                    self.on_capture(image, (abs_x1, abs_y1, abs_x2, abs_y2))
                 self._cleanup()
 
         except Exception as e:
@@ -935,7 +934,7 @@ class CaptureOverlay:
         self.canvas.delete('all')
 
         # 设置 canvas 为透明背景（完全透明以显示下面的截图）
-        self.canvas.configure(bg='', highlightthickness=0)
+        self.canvas.configure(bg='#000000', highlightthickness=0)
 
         # 重新创建 canvas 并添加截图显示
         # 先隐藏原来的 canvas
@@ -948,7 +947,7 @@ class CaptureOverlay:
             except:
                 pass
 
-        self.edit_frame = tk.Frame(self.root, bg='#2d2d2d', cursor='default')
+        self.edit_frame = tk.Frame(self.root, bg='#2d2d2d')
         self.edit_frame.place(x=x1, y=y1, width=img_w, height=img_h + toolbar_h + 2)
 
         # 截图显示区域
@@ -1520,20 +1519,16 @@ class CaptureOverlay:
         )
         self.preview_canvas.image = photo  # 保持引用
 
-    def _capture_region(self):
-        """截取框选区域（隐藏所有UI元素后截图）"""
+    def _capture_region(self, use_realtime=False):
+        """截取框选区域
+        
+        Args:
+            use_realtime: 是否使用实时截图。True 时用于长截图滚动过程，False 时使用预截图
+        """
         if not self.long_capture_rect:
             return None
         
         x1, y1, x2, y2 = self.long_capture_rect
-        
-        # 在截图前隐藏所有UI元素，避免被截取
-        try:
-            # 隐藏放大镜
-            if self.magnifier_window:
-                self.magnifier_window.withdraw()
-        except Exception:
-            pass
         
         # 转换为屏幕绝对坐标
         screen_x = self.root.winfo_rootx()
@@ -1545,20 +1540,33 @@ class CaptureOverlay:
 
         bbox = (abs_x1, abs_y1, abs_x2, abs_y2)
 
+        # 隐藏放大镜，避免被截取
         try:
-            # 隐藏预览窗口
-            # original_alpha = self.root.attributes('-alpha')
-            # self.root.attributes('-alpha', 0.0)
+            if self.magnifier_window:
+                self.magnifier_window.withdraw()
+        except Exception:
+            pass
+
+        # 隐藏预览窗口
+        try:
             if hasattr(self, 'preview_window') and self.preview_window:
                 self.preview_window.withdraw()
         except Exception:
             pass
 
-        # 截图
-        image = ImageGrab.grab(bbox=bbox)
+        if use_realtime:
+            # 长截图滚动时使用实时截图，获取滚动后的新画面
+            image = ImageGrab.grab(bbox=bbox)
+        else:
+            # 普通截图或桌面场景：使用预截图，完全避免重复截图导致的界面变化
+            if self.fullscreen_image is not None:
+                image = self.fullscreen_image.crop(bbox)
+            else:
+                # 兜底：如果没有预截图
+                image = ImageGrab.grab(bbox=bbox)
 
+        # 恢复预览窗口
         try:
-            # self.root.attributes('-alpha', original_alpha)
             if hasattr(self, 'preview_window') and self.preview_window:
                 self.preview_window.deiconify()
         except Exception:
@@ -1601,31 +1609,30 @@ class CaptureOverlay:
         if client_bottom_screen <= abs_y2:
             return None  # 没有剩余区域需要截取
         
-        # 在截图前隐藏所有UI元素，避免被截取
+        # 截取剩余区域：从框选区域底部到应用程序底部，宽度为框选区域宽度
+        bbox = (abs_x1, abs_y2, abs_x2, client_bottom_screen)
+        
+        # 隐藏放大镜，避免被截取
         try:
-            # 隐藏放大镜
             if self.magnifier_window:
                 self.magnifier_window.withdraw()
         except Exception:
             pass
         
-        
+        # 隐藏预览窗口
         try:
-            # 隐藏预览窗口
             if hasattr(self, 'preview_window') and self.preview_window:
                 self.preview_window.withdraw()
         except Exception:
             pass
         
-        # 截取剩余区域：从框选区域底部到应用程序底部，宽度为框选区域宽度
-        bbox = (abs_x1, abs_y2, abs_x2, client_bottom_screen)
-        
+        # 使用实时截图（滚动停止后的最终画面）
         try:
             image = ImageGrab.grab(bbox=bbox)
         except Exception:
             return None
         
-        # 恢复预览窗口（如果需要）
+        # 恢复预览窗口
         try:
             if hasattr(self, 'preview_window') and self.preview_window:
                 self.preview_window.deiconify()
@@ -2258,8 +2265,8 @@ class CaptureOverlay:
             rect_height = y2-y1
 
             self.scroll_unit_pixels = int(rect_height*0.5)
-            # 截取第一张图片
-            first_image_full = self._capture_region()
+            # 截取第一张图片（长截图需要实时截图获取当前画面）
+            first_image_full = self._capture_region(use_realtime=True)
             if not first_image_full:
                 self.root.after(0, self._cancel)
                 return
@@ -2296,8 +2303,8 @@ class CaptureOverlay:
                 #rollback_unit_pixels不等于0时进行回滚操作
                 self._simulate_scroll(current_lines, rollback_unit_pixels, center_x, center_y, pixels_amount=-self.scroll_unit_pixels, target_hwnd=window_hwnd)
                 
-                # 截取滚动后的图片
-                new_image = self._capture_region()
+                # 截取滚动后的图片（长截图需要实时截图获取滚动后的新画面）
+                new_image = self._capture_region(use_realtime=True)
                 if not new_image:
                     break
 
