@@ -287,13 +287,13 @@ class CaptureOverlay:
         )
         
         # 中心十字线
-        center = self.magnifier_size // 2
+        center = (self.magnifier_size + 1) // 2
         self.mag_center_h = self.canvas.create_line(
-            0, center, self.magnifier_size, center,
+            0, center, self.magnifier_size + 1, center,
             fill="#00aaff", width=1
         )
         self.mag_center_v = self.canvas.create_line(
-            center, 0, center, self.magnifier_size,
+            center, 0, center, self.magnifier_size + 1,
             fill='#00aaff', width=1
         )
         
@@ -362,7 +362,7 @@ class CaptureOverlay:
                 img = Image.new('RGB', (capture_size, capture_size), 'black')
 
             # 放大图像并更新 canvas
-            img = img.resize((self.magnifier_size, self.magnifier_size), Image.NEAREST)
+            img = img.resize((self.magnifier_size + 1, self.magnifier_size + 1), Image.NEAREST)
             photo = ImageTk.PhotoImage(img)
             self.canvas.itemconfigure(self.mag_image_id, image=photo)
             self.canvas.mag_photo = photo  # 保持引用
@@ -386,11 +386,11 @@ class CaptureOverlay:
                              mag_y + self.magnifier_size + border_offset)
             self.canvas.coords(self.mag_image_id, mag_x, mag_y)
             
-            center = self.magnifier_size // 2
+            center = (self.magnifier_size + 1) // 2
             self.canvas.coords(self.mag_center_h, mag_x, mag_y + center, 
-                             mag_x + self.magnifier_size, mag_y + center)
+                             mag_x + self.magnifier_size + 1, mag_y + center)
             self.canvas.coords(self.mag_center_v, mag_x + center, mag_y, 
-                             mag_x + center, mag_y + self.magnifier_size)
+                             mag_x + center, mag_y + self.magnifier_size + 1)
             
             # 文字位置
             self.canvas.coords(self.mag_coord_id, mag_x + 2, mag_y + 9)
