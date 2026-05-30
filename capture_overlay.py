@@ -299,11 +299,11 @@ class CaptureOverlay:
         
         # 坐标和颜色文字
         self.mag_coord_id = self.canvas.create_text(
-            2, 9, anchor=tk.NW, text="0|0", fill="#00BBFD",
+            2, 1, anchor=tk.NW, text="0|0", fill="#00BBFD",
             font=("Microsoft YaHei UI", 8)
         )
         self.mag_color_id = self.canvas.create_text(
-            2, 23, anchor=tk.NW, text="#000000", fill="#00BBFD",
+            2, 15, anchor=tk.NW, text="#000000", fill="#00BBFD",
             font=("Microsoft YaHei UI", 8)
         )
         
@@ -393,8 +393,8 @@ class CaptureOverlay:
                              mag_x + center, mag_y + self.magnifier_size + 1)
             
             # 文字位置
-            self.canvas.coords(self.mag_coord_id, mag_x + 2, mag_y + 9)
-            self.canvas.coords(self.mag_color_id, mag_x + 2, mag_y + 23)
+            self.canvas.coords(self.mag_coord_id, mag_x + 2, mag_y + 1)
+            self.canvas.coords(self.mag_color_id, mag_x + 2, mag_y + 15)
             
             # 更新文字内容
             screen_x = self.root.winfo_rootx() + x
