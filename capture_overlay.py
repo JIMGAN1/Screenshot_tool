@@ -1680,20 +1680,9 @@ class CaptureOverlay:
         x1, y1, x2, y2 = self.edit_bbox
         final_image = self._edit_base_image.crop((x1, y1, x2, y2))
 
-        # 保存裁剪后的图片到剪贴板（异步执行避免卡顿）
-        import threading
-        def copy_to_clipboard():
-            try:
-                final_image.save('temp_clipboard.png')
-                import subprocess
-                subprocess.run(['powershell', '-Command', 
-                    'Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Clipboard]::SetImage([System.Drawing.Image]::FromFile("temp_clipboard.png"))'],
-                    capture_output=True, timeout=5)
-                os.remove('temp_clipboard.png')
-            except Exception as e:
-                print(f"复制到剪贴板失败: {e}")
-        
-        threading.Thread(target=copy_to_clipboard, daemon=True).start()
+        # 保存裁剪后的图片到剪贴板
+        from utils import copy_to_clipboard
+        copy_to_clipboard(final_image)
 
         # 调用回调
         if self.on_capture:
