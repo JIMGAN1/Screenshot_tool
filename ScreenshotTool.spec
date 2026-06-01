@@ -8,7 +8,7 @@ a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[(r'D:\SourceCode\PY\screenshot_tool\JT.ico', '.')],
+    datas=[(r'D:\Programs\Screenshot_tool\JT.ico', '.')],
     hiddenimports=['secrets', 'PIL.IcoImagePlugin', 'PIL.BmpImagePlugin'],
     hookspath=[],
     hooksconfig={},
@@ -42,6 +42,6 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    version=r'D:\SourceCode\PY\screenshot_tool\version_iqaszg6y.txt',
-    icon=[r'D:\SourceCode\PY\screenshot_tool\JT.ico'] if True else [],
+    version=r'D:\Programs\Screenshot_tool\version_x0ra7l9o.txt',
+    icon=[r'D:\Programs\Screenshot_tool\JT.ico'] if True else [],
 )

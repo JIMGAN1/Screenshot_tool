@@ -418,18 +418,18 @@ class ScreenshotApp:
                 else:
                     # 多显示器拼接
                     valid_monitors = [m for i, m in enumerate(monitors) if i > 0]
-                    all_left = min(m.left for m in valid_monitors)
-                    all_top = min(m.top for m in valid_monitors)
-                    all_right = max(m.left + m.width for m in valid_monitors)
-                    all_bottom = max(m.top + m.height for m in valid_monitors)
+                    all_left = min(m["left"] for m in valid_monitors)
+                    all_top = min(m["top"] for m in valid_monitors)
+                    all_right = max(m["left"] + m["width"] for m in valid_monitors)
+                    all_bottom = max(m["top"] + m["height"] for m in valid_monitors)
                     total_width = all_right - all_left
                     total_height = all_bottom - all_top
                     base_image = Image.new('RGB', (total_width, total_height))
                     for monitor in valid_monitors:
                         screenshot = sct.grab(monitor)
                         img = Image.frombytes("RGB", screenshot.size, screenshot.bgra, "raw", "BGRX")
-                        x = monitor.left - all_left
-                        y = monitor.top - all_top
+                        x = monitor["left"] - all_left
+                        y = monitor["top"] - all_top
                         base_image.paste(img, (x, y))
 
             # 把预先截好的底图传给覆盖层，后续所有取色/放大都基于这张图
@@ -1014,10 +1014,9 @@ def main():
             with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_READ) as key:
                 value, _ = winreg.QueryValueEx(key, value_name)
             value = (value or "").strip()
-            print(f"从注册表读取的快捷键: '{value}'")
             return value or default
-        except Exception as e:
-            print(f"读取注册表异常: {e}，使用默认值")
+        except Exception:
+            _save_hotkey(default)
             return default
 
     def _save_hotkey(hotkey: str) -> None:

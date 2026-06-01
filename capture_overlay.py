@@ -94,8 +94,13 @@ class CaptureOverlay:
             pass
 
         # 预先截好的一整张屏幕图像：用于放大镜和实时取色，避免半透明遮罩影响颜色，
-        # 同时也作为“真实整屏尺寸”（包含任务栏）的依据。
+        # 同时也作为"真实整屏尺寸"（包含任务栏）的依据。
         self.fullscreen_image = base_image
+
+        # 如果有预截图且是多显示器拼接图，需要重新设置窗口大小以覆盖所有显示器
+        if base_image is not None:
+            full_w, full_h = base_image.size
+            self.root.geometry(f"{full_w}x{full_h}+0+0")
 
         # 截图区域变量
         self.start_x = None
