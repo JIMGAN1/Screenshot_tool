@@ -3,6 +3,7 @@
 """
 from time import perf_counter, sleep
 import tkinter as tk
+from tkinter import ttk
 from PIL import Image, ImageDraw, ImageFont, ImageGrab, ImageTk, ImageChops
 from numpy import array, asarray, int16, any
 import mss
@@ -52,13 +53,14 @@ GetLastError.restype = ctypes.c_uint
 class CaptureOverlay:
     """全屏框选覆盖层"""
 
-    def __init__(self, parent, on_capture, on_cancel=None, base_image=None, enable_edit=False, fullscreen_offset=(0, 0)):
+    def __init__(self, parent, on_capture, on_cancel=None, base_image=None, enable_edit=False, fullscreen_offset=(0, 0), scale_factor=1.0):
         """
         初始化覆盖层
         :param parent: 父窗口
         :param on_capture: 截图完成回调函数 (image, bbox)
         :param on_cancel: 取消回调函数
         :param base_image: 预先截取的“干净”全屏图像（PIL.Image），用于放大镜/取色，没有则使用 mss 实时截取
+        :param scale_factor: 系统 DPI 缩放比例（与主窗口保持一致）
         """
         self.parent = parent
         self.on_capture = on_capture
@@ -117,9 +119,48 @@ class CaptureOverlay:
         # 是否当前命中的是“桌面全屏”（用于单击桌面时全屏截图，包含任务栏）
         self.is_desktop_fullscreen = False
 
-        # 放大器尺寸（略放大，提升可读性）
-        self.magnifier_size = 120  # 放大显示尺寸
-        self.pixel_size = 5
+        # 放大器尺寸（略放大，提升可读性）- 与主窗口同步 DPI 缩放
+        self.scale_factor = max(0.1, float(scale_factor or 1.0))
+        self.magnifier_size = int(120 * self.scale_factor)  # 放大显示尺寸
+        self.pixel_size = max(1, int(round(5 * self.scale_factor)))
+
+        # 工具栏尺寸（与主窗口 _adjust_window_geometry 保持同样的缩放策略）
+        self.toolbar_h = int(round(40 * self.scale_factor))
+        self.btn_size = int(round(30 * self.scale_factor))
+        self.tool_btn_gap = int(round(8 * self.scale_factor))
+        self.color_gap_base = int(round(5 * self.scale_factor))
+        self.action_btn_gap = int(round(8 * self.scale_factor))
+        self.toolbar_pad = int(round(10 * self.scale_factor))
+        self.toolbar_sep_gap = int(round(15 * self.scale_factor))
+        self.toolbar_sep_pad = int(round(10 * self.scale_factor))
+        self.color_btn_w = max(8, self.btn_size // 2 + int(round(4 * self.scale_factor)))
+        # 滑块尺寸
+        # ttk.Scale 默认主题（vista）不支持 troughcolor 自定义，
+        # 用 clam 主题 + 自定义 style 统一三个滑块的外观
+        self._slider_style = ttk.Style(self.root)
+        try:
+            self._slider_style.theme_use('clam')
+        except tk.TclError:
+            pass  # clam 不可用就用默认主题
+        # clam 主题 ttk.Scale 实际 y=1 起始（不是 0），凹槽中心固定 y=9（100% DPI 实测）
+        # 让 frame 中心 y=9 → frame 高 18 物理像素（label_h=14, y=2 居中，中心 9）
+        self.slider_h = int(round(18 * self.scale_factor))
+        self.slider_w = int(round(120 * self.scale_factor))
+        # 字体（基础物理像素），调用方用 self._pt() 转成 Tk point
+        # 放大镜坐标/颜色文字、滑块左右标签都共用这个字号
+        self.toolbar_font_size = 15
+        # 工具栏左边距
+        self.toolbar_left = int(round(10 * self.scale_factor))
+
+        # Tk 字号换算：Tk 的 size 字段是 point（磅），会按系统 DPI 缩放成物理像素。
+        # 物理像素 = point * scaling * (96/72)
+        # 反过来，point = 物理像素 / (scaling * 96/72) = 物理像素 * _tk_pt_per_px
+        # 这样不管 DPI 多少，都能保证 Tk 渲染的视觉像素 = 想要的物理像素。
+        try:
+            tk_scaling = float(self.root.tk.call('tk', 'scaling'))
+        except Exception:
+            tk_scaling = self.scale_factor
+        self._tk_pt_per_px = 1.0 / (max(0.1, tk_scaling) * 96.0 / 72.0)
 
         # 创建全屏遮罩和背景
         self.canvas = tk.Canvas(
@@ -180,8 +221,10 @@ class CaptureOverlay:
         self.tip_default_text = "单击或拖动左键截图 | 右键复制坐标和色值 | 按Esc取消\n空格+左键框选滚动截图"
         self.tip_long_text = "空格+左键框选滚动截图：别框选悬浮窗和滚动条"
 
-        self.tip_default_font = ("Microsoft YaHei UI", 25, "bold")
-        self.tip_long_font = ("Microsoft YaHei UI", 35, "bold")  # 比默认大 5 号
+        # 顶部提示字号：原 25/35 (point) 在 100% DPI ≈ 33/47 物理像素，
+        # 用 self._pt() 把目标物理像素转 Tk point，避免 DPI 缩放后字号翻倍
+        self.tip_default_font = ("Microsoft YaHei UI", self._pt(25), "bold")
+        self.tip_long_font = ("Microsoft YaHei UI", self._pt(35), "bold")
 
         # 顶部提示：改为在 canvas 上绘制文字，而不是单独的 Label
         canvas_width = self.root.winfo_screenwidth()
@@ -212,68 +255,79 @@ class CaptureOverlay:
         except Exception:
             pass  # 忽略获取鼠标位置的错误
 
-    def _create_toolbar_icons(self):
-        """创建工具栏图标"""
-        size = 20
-        icons = {}
-        
-        # 矩形图标
-        img = Image.new('RGBA', (size, size), (0, 0, 0, 0))
-        d = ImageDraw.Draw(img)
-        d.rectangle([2, 2, size - 3, size - 3], outline='white', width=2)
-        icons['rect'] = ImageTk.PhotoImage(img)
-        
-        # 画笔图标：像素风格方块笔
-        img = Image.new('RGBA', (size, size), (0, 0, 0, 0))
-        d = ImageDraw.Draw(img)
-        d.line([(size - 3, 3), (8, size - 8)], fill='white', width=6)
-        d.polygon([
-        (1, size - 1),       # 三角形的左下角点 (与笔身末端重合)
-        (7, 16), # 三角形的右上角点
-        (4, 13)  # 三角形的左上角点
-        ], fill='white', width=5)
-        icons['pen'] = ImageTk.PhotoImage(img)
+    def _pt(self, pixel):
+        """把目标物理像素换算成 Tk point 字号，避免 DPI 缩放后字号翻倍"""
+        return max(6, int(round(pixel * self._tk_pt_per_px)))
 
+    def _create_toolbar_icons(self):
+        """创建工具栏图标（与主窗口同步 DPI 缩放）
+
+        1. 先在固定 20x20 基准画布上绘制（保持原设计的坐标），保证图案不畸变。
+        2. 再用 Lanczos 高质量重采样到目标尺寸，使图标在不同 DPI 下都清晰。
+        """
+        # 目标尺寸：与按钮尺寸相关（按钮 30px 时图标 20px）
+        target_size = int(round(20 * self.scale_factor))
+        base_size = 20
+        icons = {}
+
+        def _make_icon(draw_fn):
+            """在 20x20 上画图，再缩放到 target_size"""
+            img = Image.new('RGBA', (base_size, base_size), (0, 0, 0, 0))
+            d = ImageDraw.Draw(img)
+            draw_fn(d)
+            if target_size != base_size:
+                img = img.resize((target_size, target_size), Image.LANCZOS)
+            return ImageTk.PhotoImage(img)
+
+        # 矩形图标
+        def draw_rect(d):
+            d.rectangle([2, 2, base_size - 3, base_size - 3], outline='white', width=2)
+        icons['rect'] = _make_icon(draw_rect)
+
+        # 画笔图标：像素风格方块笔
+        def draw_pen(d):
+            d.line([(base_size - 3, 3), (8, base_size - 8)], fill='white', width=6)
+            d.polygon([
+                (1, base_size - 1),       # 三角形的左下角点 (与笔身末端重合)
+                (7, 16),  # 三角形的右上角点
+                (4, 13)   # 三角形的左上角点
+            ], fill='white', width=5)
+        icons['pen'] = _make_icon(draw_pen)
 
         # 文字图标：矩形框 + T
-        img = Image.new('RGBA', (size, size), (0, 0, 0, 0))
-        d = ImageDraw.Draw(img)
-        d.rectangle([0, 0, size-1, size-1], outline='white', width=2)
-        d.text((5, 0), 'T', fill='white', font=ImageFont.load_default(size=16), stroke_width=1)
-        icons['text'] = ImageTk.PhotoImage(img)
-        
+        def draw_text(d):
+            d.rectangle([0, 0, base_size - 1, base_size - 1], outline='white', width=2)
+            d.text((5, 0), 'T', fill='white',
+                   font=ImageFont.load_default(size=16), stroke_width=1)
+        icons['text'] = _make_icon(draw_text)
+
         # 撤销图标
-        img = Image.new('RGBA', (size, size), (0, 0, 0, 0))
-        d = ImageDraw.Draw(img)
-        # 1. 底部水平直线段，连接圆弧
-        d.line([(0, 18), (12, 18)], fill='white', width=3, joint='curve')
-        # 2. 右侧的 180° 圆弧（关键部分，实现弯曲效果）
-        d.arc( [(4, 4), (19, 19)],  # 圆弧的外接矩形
-            start=270, end=90, fill='white', width=3)
-        # 3. 顶部水平直线段，连接圆弧和箭头
-        d.line([(8, 4), (12, 4)], fill='white', width=4, joint='curve')
-        # 4. 箭头部分（用 polygon 画三角形）
-        d.polygon ([
-            (1, 4),   # 箭头尖点
-            (8, 0),   # 箭头左上点
-            (8, 8)   # 箭头左下点
-        ], fill='white', width=3)
-        icons['undo'] = ImageTk.PhotoImage(img)
-        
+        def draw_undo(d):
+            # 1. 底部水平直线段，连接圆弧
+            d.line([(0, 18), (12, 18)], fill='white', width=3, joint='curve')
+            # 2. 右侧的 180° 圆弧
+            d.arc([(4, 4), (19, 19)], start=270, end=90, fill='white', width=3)
+            # 3. 顶部水平直线段，连接圆弧和箭头
+            d.line([(8, 4), (12, 4)], fill='white', width=4, joint='curve')
+            # 4. 箭头部分（用 polygon 画三角形）
+            d.polygon([
+                (1, 4),   # 箭头尖点
+                (8, 0),   # 箭头左上点
+                (8, 8)    # 箭头左下点
+            ], fill='white', width=3)
+        icons['undo'] = _make_icon(draw_undo)
+
         # 取消图标：X（用大尺寸+抗锯齿）
-        img = Image.new('RGBA', (size, size), (0, 0, 0, 0))
-        d = ImageDraw.Draw(img)
-        # 用较粗的线条画X
-        d.line([(4, 4), (16, 16)], fill='#FF6B6B', width=5, joint='curve')
-        d.line([(16, 4), (4, 16)], fill='#FF6B6B', width=5, joint='curve')
-        icons['cancel'] = ImageTk.PhotoImage(img)
-        
+        def draw_cancel(d):
+            d.line([(4, 4), (16, 16)], fill='#FF6B6B', width=5, joint='curve')
+            d.line([(16, 4), (4, 16)], fill='#FF6B6B', width=5, joint='curve')
+        icons['cancel'] = _make_icon(draw_cancel)
+
         # 确认图标：勾
-        img = Image.new('RGBA', (size, size), (0, 0, 0, 0))
-        d = ImageDraw.Draw(img)
-        d.line([(1, 10), (7, 16), (19, 4)], fill='#69DB7C', width=5, joint='curve')
-        icons['confirm'] = ImageTk.PhotoImage(img)
-        
+        def draw_confirm(d):
+            d.line([(1, 10), (7, 16), (19, 4)], fill='#69DB7C', width=5, joint='curve')
+        icons['confirm'] = _make_icon(draw_confirm)
+
         return icons
 
     def _create_magnifier(self):
@@ -302,14 +356,14 @@ class CaptureOverlay:
             fill='#00aaff', width=1
         )
         
-        # 坐标和颜色文字
+        # 坐标和颜色文字（self._pt() 把物理像素转 point，避免 DPI 缩放后字号变大）
         self.mag_coord_id = self.canvas.create_text(
             2, 1, anchor=tk.NW, text="0|0", fill="#00BBFD",
-            font=("Microsoft YaHei UI", 8)
+            font=("Microsoft YaHei UI", self._pt(self.toolbar_font_size))
         )
         self.mag_color_id = self.canvas.create_text(
-            2, 15, anchor=tk.NW, text="#000000", fill="#00BBFD",
-            font=("Microsoft YaHei UI", 8)
+            2, int(round(15 * self.scale_factor)), anchor=tk.NW, text="#000000", fill="#00BBFD",
+            font=("Microsoft YaHei UI", self._pt(self.toolbar_font_size))
         )
         
         # 初始隐藏
@@ -372,12 +426,13 @@ class CaptureOverlay:
             self.canvas.itemconfigure(self.mag_image_id, image=photo)
             self.canvas.mag_photo = photo  # 保持引用
 
-            # 计算放大镜位置（边框需要向外扩展）
-            border_offset = 1
-            offset_x = 15 + border_offset
-            offset_y = 15 + border_offset
-            mag_x = x - offset_x - self.magnifier_size - 3
-            mag_y = y - offset_y - self.magnifier_size - 3
+            # 计算放大镜位置（边框需要向外扩展）- 与主窗口同步 DPI 缩放
+            border_offset = max(1, int(round(1 * self.scale_factor)))
+            offset_x = int(round(15 * self.scale_factor)) + border_offset
+            offset_y = int(round(15 * self.scale_factor)) + border_offset
+            mag_gap = int(round(3 * self.scale_factor))
+            mag_x = x - offset_x - self.magnifier_size - mag_gap
+            mag_y = y - offset_y - self.magnifier_size - mag_gap
             
             if mag_x < 0:
                 mag_x = x + offset_x - border_offset
@@ -399,7 +454,7 @@ class CaptureOverlay:
             
             # 文字位置
             self.canvas.coords(self.mag_coord_id, mag_x + 2, mag_y + 1)
-            self.canvas.coords(self.mag_color_id, mag_x + 2, mag_y + 15)
+            self.canvas.coords(self.mag_color_id, mag_x + 2, mag_y + int(round(15 * self.scale_factor)))
             
             # 更新文字内容
             screen_x = self.root.winfo_rootx() + x
@@ -989,29 +1044,26 @@ class CaptureOverlay:
         """显示编辑工具栏（直接在全屏图上绘画）"""
         # 保存截图区域坐标
         self.edit_bbox = (x1, y1, x2, y2)
-        
+
         # 截图区域尺寸
         img_w = abs(x2 - x1)
         img_h = abs(y2 - y1)
-        
-        # 工具栏尺寸
-        toolbar_h = 40
-        btn_size = 30
-        btn_gap = 5
-        
-        # 计算工具栏宽度
-        btn_size = 30
-        tool_btn_gap = 8
-        color_gap = 5
-        action_btn_gap = 8
-        # 4个工具按钮: 4*30 + 3*8 = 144
+
+        # 工具栏尺寸（与主窗口同步 DPI 缩放）
+        toolbar_h = self.toolbar_h
+        btn_size = self.btn_size
+        btn_gap = self.btn_size // 6 or 1  # 兼容极小缩放
+        tool_btn_gap = self.tool_btn_gap
+        color_gap = self.color_gap_base
+        action_btn_gap = self.action_btn_gap
+        # 4个工具按钮: 4*btn_size + 3*tool_btn_gap
         tools_width = 4 * btn_size + 3 * tool_btn_gap
-        # 6个颜色按钮: 6*17 = 102
-        color_btn_w = btn_size // 2 + 4
+        # 6个颜色按钮
+        color_btn_w = self.color_btn_w
         color_width = 6 * color_btn_w
         # 总宽度 = 左边距 + 工具 + 间隔 + 颜色 + 分隔线间隔 + 取消 + 间隔 + 确定 + 右边距
-        # 10 + 144 + 15 + 102 + 10 + 30 + 8 + 30 + 10 = 359
-        toolbar_w = 10 + tools_width + 15 + color_width + 10 + btn_size + action_btn_gap + btn_size + 10
+        toolbar_w = (self.toolbar_pad + tools_width + self.toolbar_sep_gap + color_width
+                     + self.toolbar_sep_pad + btn_size + action_btn_gap + btn_size + self.toolbar_pad)
         
         # 计算工具栏位置
         screen_w = self.root.winfo_screenwidth()
@@ -1019,13 +1071,13 @@ class CaptureOverlay:
         
         # 工具栏在截图区域下方，右边对齐
         tb_x = max(x2, x1) - toolbar_w
-        tb_y = max(y2, y1) + 5
+        tb_y = max(y2, y1) + int(round(5 * self.scale_factor))
         if tb_x < 0:
-            tb_x = 5
+            tb_x = int(round(5 * self.scale_factor))
         if tb_y + toolbar_h > screen_h:
-            tb_y = min(y1, y2) - toolbar_h - 5
+            tb_y = min(y1, y2) - toolbar_h - int(round(5 * self.scale_factor))
             if tb_y < 0:
-                tb_y = 5
+                tb_y = int(round(5 * self.scale_factor))
         
         # 强制隐藏放大镜
         self._force_hide_magnifier()
@@ -1070,17 +1122,15 @@ class CaptureOverlay:
         )
         
         # 工具栏按钮
-        btn_size = 30
         btn_y = tb_y + (toolbar_h - btn_size) // 2
-        
+
         self._toolbar_buttons = []
         self.color_buttons = {}
-        
+
         # 创建工具图标
         icons = self._create_toolbar_icons()
-        
+
         # 工具按钮
-        tool_btn_gap = 8
         self.btn_rect = tk.Button(
             self.root, image=icons['rect'],
             command=lambda: self._select_edit_tool('rect'),
@@ -1088,10 +1138,10 @@ class CaptureOverlay:
             relief=tk.FLAT, cursor='hand2', bd=0,
             highlightthickness=0, compound=tk.CENTER
         )
-        self.btn_rect.place(x=tb_x + 10, y=btn_y, width=btn_size, height=btn_size)
+        self.btn_rect.place(x=tb_x + self.toolbar_pad, y=btn_y, width=btn_size, height=btn_size)
         self._toolbar_buttons.append(self.btn_rect)
         self._icon_rect = icons['rect']
-        
+
         self.btn_pen = tk.Button(
             self.root, image=icons['pen'],
             command=lambda: self._select_edit_tool('pen'),
@@ -1099,10 +1149,10 @@ class CaptureOverlay:
             relief=tk.FLAT, cursor='hand2', bd=0,
             highlightthickness=0, compound=tk.CENTER
         )
-        self.btn_pen.place(x=tb_x + 10 + btn_size + tool_btn_gap, y=btn_y, width=btn_size, height=btn_size)
+        self.btn_pen.place(x=tb_x + self.toolbar_pad + btn_size + tool_btn_gap, y=btn_y, width=btn_size, height=btn_size)
         self._toolbar_buttons.append(self.btn_pen)
         self._icon_pen = icons['pen']
-        
+
         self.btn_text = tk.Button(
             self.root, image=icons['text'],
             command=lambda: self._select_edit_tool('text'),
@@ -1110,10 +1160,10 @@ class CaptureOverlay:
             relief=tk.FLAT, cursor='hand2', bd=0,
             highlightthickness=0, compound=tk.CENTER
         )
-        self.btn_text.place(x=tb_x + 10 + (btn_size + tool_btn_gap) * 2, y=btn_y, width=btn_size, height=btn_size)
+        self.btn_text.place(x=tb_x + self.toolbar_pad + (btn_size + tool_btn_gap) * 2, y=btn_y, width=btn_size, height=btn_size)
         self._toolbar_buttons.append(self.btn_text)
         self._icon_text = icons['text']
-        
+
         # 撤销按钮
         self.btn_undo = tk.Button(
             self.root, image=icons['undo'],
@@ -1122,37 +1172,36 @@ class CaptureOverlay:
             relief=tk.FLAT, cursor='hand2', bd=0,
             highlightthickness=0, compound=tk.CENTER
         )
-        self.btn_undo.place(x=tb_x + 10 + (btn_size + tool_btn_gap) * 3, y=btn_y, width=btn_size, height=btn_size)
+        self.btn_undo.place(x=tb_x + self.toolbar_pad + (btn_size + tool_btn_gap) * 3, y=btn_y, width=btn_size, height=btn_size)
         self._toolbar_buttons.append(self.btn_undo)
         self._icon_undo = icons['undo']
-        
+
         # 颜色按钮
         colors = ['#FF0000', '#00FF00', '#0000FF', '#FFFF00', '#000000', '#FFFFFF']
-        color_start_x = tb_x + 10 + tools_width + 15
-        color_gap = 0
+        color_start_x = tb_x + self.toolbar_pad + tools_width + self.toolbar_sep_gap
         for i, color in enumerate(colors):
             btn = tk.Button(
                 self.root, bg=color, width=2, height=1,
                 relief=tk.FLAT, cursor='hand2', bd=0,
                 command=lambda c=color: self._select_edit_color(c)
             )
-            cx = color_start_x + i * (color_btn_w + color_gap)
+            cx = color_start_x + i * (color_btn_w + 0)
             btn.place(x=cx, y=btn_y, width=color_btn_w, height=btn_size)
             self._toolbar_buttons.append(btn)
             self.color_buttons[color] = btn
-        
+
         # 分隔线
-        sep_x = color_start_x + color_width + 10
+        sep_x = color_start_x + color_width + self.toolbar_sep_pad
         self._toolbar_sep = self.canvas.create_line(
-            sep_x, tb_y + 6, sep_x, tb_y + toolbar_h - 6,
+            sep_x, tb_y + int(round(6 * self.scale_factor)),
+            sep_x, tb_y + toolbar_h - int(round(6 * self.scale_factor)),
             fill='#555555', width=1
         )
-        
+
         # 取消/确定按钮（使用图标）
-        action_btn_gap = 8
-        ok_btn_x = tb_x + toolbar_w - 10 - btn_size
+        ok_btn_x = tb_x + toolbar_w - self.toolbar_pad - btn_size
         cancel_btn_x = ok_btn_x - btn_size - action_btn_gap
-        
+
         self.btn_cancel = tk.Button(
             self.root, image=icons['cancel'],
             command=self._edit_cancel,
@@ -1163,7 +1212,7 @@ class CaptureOverlay:
         self.btn_cancel.place(x=cancel_btn_x, y=btn_y, width=btn_size, height=btn_size)
         self._toolbar_buttons.append(self.btn_cancel)
         self._icon_cancel = icons['cancel']
-        
+
         self.btn_ok = tk.Button(
             self.root, image=icons['confirm'],
             command=self._edit_confirm,
@@ -1177,83 +1226,113 @@ class CaptureOverlay:
         
         # 画笔粗细调节器（默认隐藏）
         self.pen_width = 2
-        self.text_size = 16
+        # 默认文字大小：基础 16px × DPI 缩放系数，高 DPI 屏幕默认字号同步放大
+        self.text_size = max(8, int(round(16 * self.scale_factor)))
         self.rect_width = 2
-        slider_y = tb_y + toolbar_h + 5
-        slider_h = 20
-        slider_w = 120
-        
+        slider_y = tb_y + toolbar_h + int(round(5 * self.scale_factor))
+        slider_h = self.slider_h
+        slider_w = self.slider_w
+
+        # 缩放后的内部布局
+        slider_label_w = int(round(20 * self.scale_factor))
+        slider_text_w = int(round(15 * self.scale_factor))
+        slider_length = max(40, slider_w - slider_label_w - slider_text_w)
+        # 把"物理像素"转成 Tk point，避免 DPI 缩放后字号爆炸
+        slider_font_size = self._pt(self.toolbar_font_size)
+        # 标签垂直居中（用 frame 高度算 y）
+        slider_label_h = int(round(14 * self.scale_factor))
+        slider_label_y = max(0, (slider_h - slider_label_h) // 2)
+        # ttk.Scale 凹槽居中（clam 主题实测：h//2-8 让 frame/label 中心对齐）
+        slider_widget_y = slider_h // 2 - 8
+
         # 创建矩形边框粗细滑块容器（工具栏下方）
         self._rect_slider_frame = tk.Frame(self.root, bg='#2d2d2d', relief=tk.FLAT, bd=0)
-        self._rect_slider_frame.place(x=tb_x + 10, y=slider_y, width=slider_w, height=slider_h)
+        self._rect_slider_frame.place(x=tb_x + self.toolbar_pad, y=slider_y, width=slider_w, height=slider_h)
         self._rect_slider_frame.lower()  # 默认隐藏
-        
+
         tk.Label(
             self._rect_slider_frame, text='粗', fg='white', bg='#2d2d2d',
-            font=('Arial', 8)
-        ).place(x=0, y=3, width=20, height=14)
-        
-        self._rect_width_slider = tk.Scale(
+            font=('Arial', slider_font_size)
+        ).place(x=0, y=slider_label_y, width=slider_label_w, height=slider_label_h)
+
+        # 配置 ttk.Scale 主题（clam 主题支持 troughcolor 自定义）
+        self._slider_style.configure(
+            'Capture.Horizontal.TScale',
+            troughcolor='#555555',
+            background='#2d2d2d',
+            borderwidth=0,
+            lightcolor='#2d2d2d',
+            darkcolor='#2d2d2d',
+            arrowcolor='#2d2d2d',
+        )
+
+        self._rect_width_slider = ttk.Scale(
             self._rect_slider_frame, from_=1, to=10, orient=tk.HORIZONTAL,
-            length=80, bg='#2d2d2d', fg='white', troughcolor='#555555',
-            highlightthickness=0, showvalue=0, command=self._on_rect_width_change
+            length=slider_length, style='Capture.Horizontal.TScale',
+            command=self._on_rect_width_change
         )
         self._rect_width_slider.set(2)
-        self._rect_width_slider.place(x=20, y=0)
-        
+        self._rect_width_slider.place(x=slider_label_w, y=slider_widget_y)
+
         self._rect_width_label = tk.Label(
             self._rect_slider_frame, text='2', fg='white', bg='#2d2d2d',
-            font=('Arial', 8)
+            font=('Arial', slider_font_size)
         )
-        self._rect_width_label.place(x=105, y=3, width=15, height=14)
-        
+        self._rect_width_label.place(x=slider_label_w + slider_length, y=slider_label_y,
+                                      width=slider_text_w, height=slider_label_h)
+
         # 创建画笔粗细滑块容器（工具栏下方）
         self._pen_slider_frame = tk.Frame(self.root, bg='#2d2d2d', relief=tk.FLAT, bd=0)
-        self._pen_slider_frame.place(x=tb_x + 10, y=slider_y, width=slider_w, height=slider_h)
+        self._pen_slider_frame.place(x=tb_x + self.toolbar_pad, y=slider_y, width=slider_w, height=slider_h)
         self._pen_slider_frame.lower()  # 默认隐藏
-        
+
         tk.Label(
             self._pen_slider_frame, text='粗', fg='white', bg='#2d2d2d',
-            font=('Arial', 8)
-        ).place(x=0, y=3, width=20, height=14)
-        
-        self._pen_width_slider = tk.Scale(
+            font=('Arial', slider_font_size)
+        ).place(x=0, y=slider_label_y, width=slider_label_w, height=slider_label_h)
+
+        self._pen_width_slider = ttk.Scale(
             self._pen_slider_frame, from_=1, to=10, orient=tk.HORIZONTAL,
-            length=80, bg='#2d2d2d', fg='white', troughcolor='#555555',
-            highlightthickness=0, showvalue=0, command=self._on_pen_width_change
+            length=slider_length, style='Capture.Horizontal.TScale',
+            command=self._on_pen_width_change
         )
         self._pen_width_slider.set(2)
-        self._pen_width_slider.place(x=20, y=0)
-        
+        self._pen_width_slider.place(x=slider_label_w, y=slider_widget_y)
+
         self._pen_width_label = tk.Label(
             self._pen_slider_frame, text='2', fg='white', bg='#2d2d2d',
-            font=('Arial', 8)
+            font=('Arial', slider_font_size)
         )
-        self._pen_width_label.place(x=105, y=3, width=15, height=14)
-        
+        self._pen_width_label.place(x=slider_label_w + slider_length, y=slider_label_y,
+                                    width=slider_text_w, height=slider_label_h)
+
         # 文字字体大小调节器（默认隐藏）
         self._text_slider_frame = tk.Frame(self.root, bg='#2d2d2d', relief=tk.FLAT, bd=0)
-        self._text_slider_frame.place(x=tb_x + 10, y=slider_y, width=slider_w, height=slider_h)
+        self._text_slider_frame.place(x=tb_x + self.toolbar_pad, y=slider_y, width=slider_w, height=slider_h)
         self._text_slider_frame.lower()  # 默认隐藏
-        
+
         tk.Label(
             self._text_slider_frame, text='字', fg='white', bg='#2d2d2d',
-            font=('Arial', 8)
-        ).place(x=0, y=3, width=20, height=14)
-        
-        self._text_size_slider = tk.Scale(
-            self._text_slider_frame, from_=10, to=48, orient=tk.HORIZONTAL,
-            length=80, bg='#2d2d2d', fg='white', troughcolor='#555555',
-            highlightthickness=0, showvalue=0, command=self._on_text_size_change
+            font=('Arial', slider_font_size)
+        ).place(x=0, y=slider_label_y, width=slider_label_w, height=slider_label_h)
+
+        # 滑块范围/初始值都按 DPI 缩放（高 DPI 屏幕能调到更大字号）
+        text_size_min = max(6, int(round(8 * self.scale_factor)))
+        text_size_max = max(48, int(round(48 * self.scale_factor)))
+        self._text_size_slider = ttk.Scale(
+            self._text_slider_frame, from_=text_size_min, to=text_size_max, orient=tk.HORIZONTAL,
+            length=slider_length, style='Capture.Horizontal.TScale',
+            command=self._on_text_size_change
         )
-        self._text_size_slider.set(16)
-        self._text_size_slider.place(x=20, y=0)
-        
+        self._text_size_slider.set(self.text_size)
+        self._text_size_slider.place(x=slider_label_w, y=slider_widget_y)
+
         self._text_size_label = tk.Label(
-            self._text_slider_frame, text='16', fg='white', bg='#2d2d2d',
-            font=('Arial', 8)
+            self._text_slider_frame, text=str(self.text_size), fg='white', bg='#2d2d2d',
+            font=('Arial', slider_font_size)
         )
-        self._text_size_label.place(x=105, y=3, width=15, height=14)
+        self._text_size_label.place(x=slider_label_w + slider_length, y=slider_label_y,
+                                    width=slider_text_w, height=slider_label_h)
         
         # 状态变量
         self.edit_tool = 'rect'
@@ -1358,20 +1437,20 @@ class CaptureOverlay:
         self.edit_tool = tool
 
     def _on_rect_width_change(self, value):
-        """矩形边框粗细改变"""
-        self.rect_width = int(value)
+        """矩形边框粗细改变（ttk.Scale 传 '2.0'，tk.Scale 传 '2'，都用 int(float) 兼容）"""
+        self.rect_width = int(float(value))
         if hasattr(self, '_rect_width_label'):
             self._rect_width_label.config(text=str(self.rect_width))
 
     def _on_pen_width_change(self, value):
         """画笔粗细改变"""
-        self.pen_width = int(value)
+        self.pen_width = int(float(value))
         if hasattr(self, '_pen_width_label'):
             self._pen_width_label.config(text=str(self.pen_width))
 
     def _on_text_size_change(self, value):
         """文字大小改变"""
-        self.text_size = int(value)
+        self.text_size = int(float(value))
         if hasattr(self, '_text_size_label'):
             self._text_size_label.config(text=str(self.text_size))
 
@@ -1464,7 +1543,7 @@ class CaptureOverlay:
             return
         
         # 如果有未提交的输入框，先提交
-        if hasattr(self, '_text_entry') and self._text_entry:
+        if hasattr(self, '_text_buffer') and self._text_buffer is not None:
             self._commit_text_input()
             # 标记刚刚提交过，不要再次创建输入框
             self._text_just_committed = True
@@ -1578,100 +1657,299 @@ class CaptureOverlay:
             self._create_text_input(event.x, event.y)
 
     def _create_text_input(self, x, y):
-        """在指定位置创建文字输入框"""
+        """在指定位置进入"文字输入态"（PIL 画文字贴到 canvas + 隐藏 Entry 收 IME）
+
+        关键：
+        - 文字预览和最终落图使用 **完全相同的 PIL 字体（msyh.ttc）和相同字号**
+        - 预览图就是用 PIL 临时画一张 RGBA 小图（透明背景），再 ImageTk 贴到 canvas
+        - 因此"输入时看到的字"和"确定后印到截图上的字"是**同一张图、像素级一致**
+        - 背景完全透明（不引入任何 widget 矩形）
+        - 中文/IME 由一个屏幕外的隐藏 Entry 接收（Entry 自身不显示）
+        - Enter 提交、Backspace 删除、Escape 取消
+        """
         # 隐藏其他滑块
         if hasattr(self, '_text_slider_frame') and self._text_slider_visible:
             self._text_slider_frame.lower()
-        
-        # 如果已有输入框，先提交
-        if hasattr(self, '_text_entry') and self._text_entry:
+
+        # 如果已有未提交的输入，先提交
+        if hasattr(self, '_text_buffer') and self._text_buffer is not None:
             self._commit_text_input()
-        
-        # 计算输入框大小（根据字体大小）
-        font_size = self.text_size
-        entry_width = max(120, font_size * 8)
-        entry_height = font_size + 6
-        
+
         edit_color = getattr(self, 'edit_color', '#FF0000')
-        
-        # 创建透明输入框（使用 Canvas + Text）
-        self._text_canvas = tk.Canvas(
+        self._text_buffer = ''
+        self._text_pos = (x, y)
+        self._text_color = edit_color
+        self._text_cursor_visible = True
+        self._text_image_id = None  # canvas 上文字图片 item id
+        self._text_photo = None     # 保持引用防止 PhotoImage 被 GC
+        self._text_cursor_id = None
+        self._text_cursor_after = None
+
+        # 锁定本次输入的 PIL 字体（与 _commit_text_input 用同一份）
+        # self.text_size 语义是"物理像素"，PIL 直接吃
+        phys_font_size = max(6, int(round(self.text_size)))
+        try:
+            self._text_pil_font = ImageFont.truetype("msyh.ttc", phys_font_size)
+        except Exception:
+            self._text_pil_font = ImageFont.load_default()
+        self._text_phys_size = phys_font_size
+
+        # 屏幕外隐藏 Entry：用来接收 IME 输入（中文/标点必须由 widget 提交，
+        # canvas 上拿不到 IME composition）。Entry 设到屏幕外、alpha=0、外观全清。
+        self._ime_entry = tk.Entry(
             self.root,
-            width=entry_width,
-            height=entry_height,
-            bg='#1a1a2e',
-            highlightthickness=0,
-            bd=0
+            bg='black', fg=edit_color, insertbackground=edit_color,
+            relief=tk.FLAT, bd=0, highlightthickness=0,
         )
-        self._text_canvas.place(x=x, y=y)
-        
-        # 创建 Text 小部件（使用设置的颜色）
-        self._text_entry = tk.Text(
-            self._text_canvas,
-            width=20,
-            height=1,
-            bg='#1a1a2e',
-            fg=edit_color,
-            insertbackground=edit_color,
-            relief=tk.FLAT,
-            bd=0,
-            font=('Arial', font_size),
-            highlightthickness=0
+        # 放到屏幕外、尺寸 1×1
+        try:
+            self.root.update_idletasks()
+            offscreen = -2000, -2000
+            self._ime_entry.place(x=offscreen[0], y=offscreen[1], width=1, height=1)
+        except Exception:
+            pass
+        self._ime_entry.focus_set()
+
+        # 绑字符输入和编辑键（KeyPress 才能拿到 char 含 IME 提交结果）
+        self._ime_entry.bind('<KeyPress>', self._on_text_key_press)
+        self._ime_entry.bind('<Return>', lambda e: self._commit_text_input())
+        self._ime_entry.bind('<Escape>', lambda e: self._cancel_text_input())
+        self._ime_entry.bind('<BackSpace>', lambda e: self._on_text_backspace())
+        # IME composition 期间的输入也希望即时反映到 canvas
+        self._ime_entry.bind('<<Paste>>', lambda e: self._on_text_paste())
+        # 拦截"焦点离开"时如果还有未提交 buffer：自动提交
+        self._ime_entry.bind('<FocusOut>', lambda e: self._commit_text_input())
+
+        # 在 canvas 上画文字（初始空）和光标
+        self._redraw_text_canvas()
+        self._schedule_cursor_blink()
+
+    def _measure_text_bbox(self, text):
+        """用锁定的 PIL 字体测一段文字的 (x0, y0, x1, y1) 像素 bbox。
+        空字符串返回 (0, 0, 0, text_size)。"""
+        font = self._text_pil_font
+        size = self._text_phys_size
+        if not text:
+            return (0, 0, 0, size)
+        try:
+            bb = font.getbbox(text)
+            return bb
+        except Exception:
+            try:
+                w = int(round(font.getlength(text)))
+                ascent, descent = font.getmetrics()
+                return (0, -ascent, w, descent)
+            except Exception:
+                w = int(round(len(text) * size * 0.6))
+                return (0, 0, w, size)
+
+    def _redraw_text_canvas(self):
+        """根据 self._text_buffer 在 canvas 上重画文字和光标
+
+        实现：用 PIL 画一张 RGBA 小图（透明背景，文字用 msyh.ttc + text_size），
+        转 ImageTk 贴到 canvas。光标用 PIL bbox 测实际像素宽度 → 光标和文字
+        在视觉上**完全一致**（同一字体/同一字号/同一像素）。
+        """
+        if not hasattr(self, '_text_buffer'):
+            return
+        x, y = self._text_pos
+        text = self._text_buffer or ''
+        size = self._text_phys_size
+
+        # 测文字 bbox（PIL 字体真实像素边界）
+        try:
+            bb = self._measure_text_bbox(text)
+        except Exception:
+            bb = (0, 0, max(1, int(len(text) * size * 0.6)), size)
+        text_w = max(1, int(bb[2] - bb[0]))
+        text_h = max(1, int(bb[3] - bb[1]))
+
+        # 用 PIL 画一张带文字的 RGBA 小图
+        img = Image.new('RGBA', (text_w, text_h), (0, 0, 0, 0))
+        d = ImageDraw.Draw(img)
+        c = self._text_color
+        try:
+            rr, gg, bb_col = int(c[1:3], 16), int(c[3:5], 16), int(c[5:7], 16)
+        except Exception:
+            rr, gg, bb_col = 255, 0, 0
+        d.text((-bb[0], -bb[1]), text, fill=(rr, gg, bb_col, 255), font=self._text_pil_font)
+        self._text_photo = ImageTk.PhotoImage(img)
+
+        # 替换 canvas 上的旧 image
+        if self._text_image_id is not None:
+            try:
+                self.canvas.delete(self._text_image_id)
+            except Exception:
+                pass
+        self._text_image_id = self.canvas.create_image(
+            x, y, image=self._text_photo, anchor='nw'
         )
-        self._text_entry.pack(fill=tk.BOTH, expand=True)
-        self._text_entry.focus_set()
-        
-        # 绑定回车键提交
-        self._text_entry.bind('<Return>', lambda e: self._commit_text_input())
-        # 绑定 Escape 取消输入
-        self._text_entry.bind('<Escape>', lambda e: self._cancel_text_input())
-        
-        # 保存输入位置
-        self._text_input_pos = (x, y)
+
+        # 光标：x = 文字右边缘，高度 = 文字 bbox 高度（与字符严格一致）
+        cursor_x = x + text_w
+        cursor_y1 = y
+        cursor_y2 = y + text_h
+
+        if self._text_cursor_id is not None:
+            try:
+                self.canvas.delete(self._text_cursor_id)
+            except Exception:
+                pass
+        self._text_cursor_id = self.canvas.create_line(
+            cursor_x, cursor_y1, cursor_x, cursor_y2,
+            fill=self._text_color, width=1
+        )
+        if not self._text_cursor_visible:
+            self.canvas.itemconfigure(self._text_cursor_id, state='hidden')
+
+    def _schedule_cursor_blink(self):
+        """光标闪烁定时器"""
+        if not hasattr(self, '_text_buffer') or self._text_buffer is None:
+            return
+        self._text_cursor_visible = not self._text_cursor_visible
+        if self._text_cursor_id is not None:
+            try:
+                self.canvas.itemconfigure(
+                    self._text_cursor_id,
+                    state=('normal' if self._text_cursor_visible else 'hidden')
+                )
+            except Exception:
+                pass
+        try:
+            self._text_cursor_after = self.root.after(500, self._schedule_cursor_blink)
+        except Exception:
+            pass
+
+    def _on_text_key_press(self, event):
+        """KeyPress 事件：把 event.char 追加到 buffer（支持中文 IME 提交结果）
+
+        Tk 行为：IME composition 期间 event.char 为空；
+        IME 提交（按空格/回车选词）后会触发 KeyPress，event.char 为中文字符。
+        """
+        if not hasattr(self, '_text_buffer') or self._text_buffer is None:
+            return None
+        if not event.char:
+            return None  # composition 中，无字符可加
+        if ord(event.char[0]) < 32:  # 控制字符（含 BackSpace 的 \x08、Tab 等）跳过
+            return None
+        self._text_buffer += event.char
+        self._redraw_text_canvas()
+        return 'break'  # 阻止 Entry 把字符回显到它自己（Entry 不可见）
+
+    def _on_text_backspace(self):
+        """BackSpace：删除 buffer 最后一个字符"""
+        if not hasattr(self, '_text_buffer') or not self._text_buffer:
+            return 'break'
+        self._text_buffer = self._text_buffer[:-1]
+        self._redraw_text_canvas()
+        return 'break'
+
+    def _on_text_paste(self):
+        """粘贴事件：把剪贴板内容追加到 buffer"""
+        try:
+            clip = self.root.clipboard_get()
+        except Exception:
+            return 'break'
+        if clip:
+            self._text_buffer += clip
+            self._redraw_text_canvas()
+        return 'break'
+
+    def _destroy_text_widgets(self):
+        """销毁光标定时器 + canvas 上的文字/光标 + 隐藏 Entry"""
+        if hasattr(self, '_text_cursor_after') and self._text_cursor_after:
+            try:
+                self.root.after_cancel(self._text_cursor_after)
+            except Exception:
+                pass
+        self._text_cursor_after = None
+        if self._text_image_id is not None:
+            try:
+                self.canvas.delete(self._text_image_id)
+            except Exception:
+                pass
+        self._text_image_id = None
+        if self._text_cursor_id is not None:
+            try:
+                self.canvas.delete(self._text_cursor_id)
+            except Exception:
+                pass
+        self._text_cursor_id = None
+        if hasattr(self, '_ime_entry') and self._ime_entry is not None:
+            try:
+                self._ime_entry.destroy()
+            except Exception:
+                pass
+        self._ime_entry = None
 
     def _cancel_text_input(self):
-        """取消文字输入"""
-        if hasattr(self, '_text_canvas') and self._text_canvas:
-            try:
-                self._text_canvas.destroy()
-            except:
-                pass
-        self._text_canvas = None
-        self._text_entry = None
+        """取消文字输入：清空 buffer，销毁所有画上去的元素和隐藏 Entry"""
+        self._destroy_text_widgets()
+        self._text_buffer = None
         self._text_just_committed = False
 
     def _commit_text_input(self):
-        """提交文字输入"""
-        if not hasattr(self, '_text_entry') or not self._text_entry:
+        """提交文字输入：把 buffer 中文字用 PIL 画到 edit_base_image 上，
+        销毁临时元素（canvas 上的预览文字/光标 + 隐藏 Entry）"""
+        if not hasattr(self, '_text_buffer') or self._text_buffer is None:
             return
-        
-        text = self._text_entry.get("1.0", tk.END).strip()
-        x, y = self._text_input_pos if hasattr(self, '_text_input_pos') else (0, 0)
-        
-        # 销毁输入框
-        try:
-            self._text_entry.destroy()
-        except:
-            pass
-        self._text_entry = None
-        
-        try:
-            if hasattr(self, '_text_canvas') and self._text_canvas:
-                self._text_canvas.destroy()
-                self._text_canvas = None
-        except:
-            pass
-        
-        # 如果有文字，绘制到图片
+
+        text = self._text_buffer
+        x, y = self._text_pos
+        self._destroy_text_widgets()
+        self._text_buffer = None
+
         if text:
+            # 直接用本次输入预览时锁定的 PIL 字体（_text_pil_font），
+            # 保证"输入时看到的字"和"确定后印到图上的字"是**像素级一致**
+            font = getattr(self, '_text_pil_font', None)
+            if font is None:
+                try:
+                    phys_font_size = max(6, int(round(self.text_size)))
+                    font = ImageFont.truetype("msyh.ttc", phys_font_size)
+                except Exception:
+                    font = ImageFont.load_default()
+
+            # 关键：预览和落图必须**用完全相同的 PIL 渲染参数**。
+            # 预览用：d.text((-bb[0], -bb[1]), text, font=font) 画到 (0,0)=bbox 顶的小图，
+            # 然后 create_image(x, y, anchor='nw')。这等同于"以文字 bbox 顶为 (x, y)"。
+            # PIL 的 ImageDraw.text((x, y), ...) 不是以 bbox 顶为锚点，而是以
+            # 字符"ink 顶"附近某点为锚点（msyh 这种字体 baseline 之下还有 ~0.2*字号
+            # 的 descent/padding），所以会向下偏几像素。
+            # 这里**复用预览的渲染路径**到 edit_base_image：先画到小图，再 paste 到 (x, y)。
             try:
-                font = ImageFont.truetype("msyh.ttc", self.text_size)
-            except:
-                font = ImageFont.load_default()
-            self._edit_draw.text((x, y), text, fill=self.edit_color, font=font)
+                bb = font.getbbox(text)
+            except Exception:
+                try:
+                    w = int(round(font.getlength(text)))
+                    ascent, descent = font.getmetrics()
+                    bb = (0, -ascent, w, descent)
+                except Exception:
+                    w = int(round(len(text) * self.text_size * 0.6))
+                    bb = (0, 0, w, int(round(self.text_size)))
+            text_w = max(1, int(bb[2] - bb[0]))
+            text_h = max(1, int(bb[3] - bb[1]))
+            tmp = Image.new('RGBA', (text_w, text_h), (0, 0, 0, 0))
+            td = ImageDraw.Draw(tmp)
+            c = self.edit_color
+            try:
+                rr, gg, bbc = int(c[1:3], 16), int(c[3:5], 16), int(c[5:7], 16)
+            except Exception:
+                rr, gg, bbc = 255, 0, 0
+            td.text((-bb[0], -bb[1]), text, fill=(rr, gg, bbc, 255), font=font)
+            # 用 paste+mask 而不是 alpha_composite，因为 _edit_base_image 通常是 RGB
+            # （ImageGrab 抓的图），alpha_composite 在 RGB 图上行为不可靠
+            # paste 的 mask=tmp 用 tmp 的 alpha 通道作"透明度蒙版"，
+            # 完全透明的像素不覆盖背景，正好等于 alpha_composite 的效果
+            try:
+                self._edit_base_image.paste(tmp, (x, y), mask=tmp)
+            except Exception:
+                # 兜底：先转 RGBA 再 alpha_composite，再转回原模式
+                base_rgba = self._edit_base_image.convert('RGBA')
+                base_rgba.paste(tmp, (x, y), mask=tmp)
+                self._edit_base_image = base_rgba.convert(self._edit_base_image.mode)
             self._redraw_canvas()
-        
-        # 重置提交标记
+
         self._text_just_committed = False
 
     def _edit_on_key(self, event):

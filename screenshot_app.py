@@ -437,7 +437,8 @@ class ScreenshotApp:
             self.overlay = CaptureOverlay(
                 self.root, on_capture, on_cancel, base_image,
                 enable_edit=self.edit_after_capture.get(),
-                fullscreen_offset=(0, 0)
+                fullscreen_offset=(0, 0),
+                scale_factor=self._scale_factor,
             )
         except Exception as e:
             print(f"创建覆盖层失败：{e}")

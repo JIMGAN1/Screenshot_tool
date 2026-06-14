@@ -42,6 +42,6 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    version=r'D:\SourceCode\PY\screenshot_tool\version_rnl_lud2.txt',
+    version=r'D:\SourceCode\PY\screenshot_tool\version_d7i1m9rm.txt',
     icon=[r'D:\SourceCode\PY\screenshot_tool\JT.ico'] if True else [],
 )
